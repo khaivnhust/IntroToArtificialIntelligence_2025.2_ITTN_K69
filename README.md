@@ -29,6 +29,7 @@ Deployment / Demo: Streamlit
 
 Storage: Parquet
 ## Project Structure
+```
 fashion-recommender/
 ├── data/                          # Raw & processed datasets
 │   ├── raw/                       # Original H&M dataset
@@ -54,6 +55,7 @@ fashion-recommender/
 ├── docs/                          # Reports, diagrams
 ├── requirements.txt
 └── README.md
+```
 ## Core Features Implementation
 Data Preprocessing: Làm sạch, encode user/item, lọc theo thời gian
 
