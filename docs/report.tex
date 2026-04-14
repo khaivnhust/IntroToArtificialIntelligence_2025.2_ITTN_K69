@@ -1,0 +1,393 @@
+% ─────────────────────────────────────────────────────────────────────────────
+% report.tex — Báo cáo tóm tắt kiến trúc hệ thống gợi ý H&M
+% Compile: pdflatex report.tex (hoặc xelatex report.tex)
+% ─────────────────────────────────────────────────────────────────────────────
+\documentclass[12pt,a4paper]{article}
+
+% ── Packages ────────────────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage[T5]{fontenc}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{float}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=green!60!black,
+    urlcolor=blue!60!black,
+}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!80!black}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!60!black},
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{gray!30},
+    backgroundcolor=\color{gray!5},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    tabsize=4,
+}
+
+% ── Title ───────────────────────────────────────────────────────────────────
+\title{%
+    \textbf{Báo cáo kỹ thuật}\\[6pt]
+    \Large Hệ thống Gợi ý Thời trang H\&M\\
+    \large Hybrid Neural Collaborative Filtering kết hợp Visual Features
+}
+\author{Nhóm phát triển — Intro AI}
+\date{\today}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Tổng quan dự án}
+% ═════════════════════════════════════════════════════════════════════════════
+
+Dự án xây dựng một hệ thống gợi ý sản phẩm thời trang (Fashion Recommendation System)
+dựa trên bộ dữ liệu \textbf{H\&M Personalized Fashion Recommendations} từ Kaggle.
+Hệ thống kết hợp kỹ thuật \textit{Neural Collaborative Filtering (NCF)} với
+\textit{Visual Feature Extraction} để tạo ra một mô hình Hybrid có khả năng
+cá nhân hoá gợi ý cho từng khách hàng.
+
+\subsection{Kiến trúc tổng thể}
+
+Hệ thống gồm 5 module chính:
+
+\begin{table}[H]
+\centering
+\caption{Danh sách các module và chức năng}
+\begin{tabular}{lll}
+\toprule
+\textbf{Module} & \textbf{Tệp nguồn} & \textbf{Vai trò} \\
+\midrule
+Data Loader      & \texttt{data\_loader.py}   & Đọc dữ liệu, tiền xử lý, tạo Dataset \\
+Models           & \texttt{models.py}         & NCF, FeatureExtractor, HybridModel \\
+Metrics          & \texttt{metrics.py}        & MAP@12, NDCG@K, Hit Rate \\
+Training         & \texttt{train\_hybrid.py}  & Vòng lặp huấn luyện, Negative Sampling \\
+Demo UI          & \texttt{app.py}            & Giao diện Streamlit \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Module \texttt{data\_loader.py} — Quản lý dữ liệu}
+% ═════════════════════════════════════════════════════════════════════════════
+
+Module này đảm nhiệm toàn bộ việc đọc và tiền xử lý dữ liệu, sử dụng thư viện
+\textbf{Polars} để tối ưu hiệu năng so với Pandas truyền thống.
+
+\subsection{Class \texttt{DataLoaderPolars}}
+
+\begin{itemize}[leftmargin=2em]
+    \item Đọc 4 tệp Parquet: \texttt{articles\_cleaned}, \texttt{customers\_fixed},
+          \texttt{hm\_train}, \texttt{hm\_test}.
+    \item Phương thức \texttt{join\_features(df)} thực hiện \texttt{LEFT JOIN}
+          giữa bảng giao dịch với bảng khách hàng (qua \texttt{user\_id}) và
+          bảng sản phẩm (qua \texttt{item\_id} hoặc \texttt{article\_id}).
+\end{itemize}
+
+\subsection{Class \texttt{PopularityBaseline}}
+
+Baseline đơn giản nhất: đếm tần suất mua của từng \texttt{item\_id} trong tập
+huấn luyện, lấy 12 sản phẩm bán chạy nhất làm gợi ý mặc định cho mọi người dùng.
+
+\subsection{Class \texttt{MatrixFactorization}}
+
+Mô hình phân rã ma trận (Matrix Factorization) bằng PyTorch:
+\begin{equation}
+    \hat{r}_{u,i} = \mathbf{p}_u^{\top} \mathbf{q}_i + b_u + b_i
+\end{equation}
+trong đó $\mathbf{p}_u$, $\mathbf{q}_i$ là embedding vectors,
+$b_u$, $b_i$ là bias tương ứng.
+
+\subsection{Class \texttt{HMDataset} và hàm \texttt{calculate\_map12}}
+
+\begin{itemize}[leftmargin=2em]
+    \item \texttt{HMDataset}: Wrapper cho PyTorch \texttt{Dataset},
+          chuyển đổi các mảng \texttt{user\_id}, \texttt{item\_id}, \texttt{label}
+          thành tensors.
+    \item \texttt{calculate\_map12}: Tính Mean Average Precision @ 12
+          trên tập test.
+\end{itemize}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Module \texttt{models.py} — Kiến trúc mô hình}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Class \texttt{FeatureExtractor}}
+
+Tải tệp \texttt{visual\_features\_sample.npz} chứa vector đặc trưng hình ảnh
+2048 chiều (trích xuất từ pre-trained CNN, tiêu biểu là ResNet-50).
+
+\begin{itemize}[leftmargin=2em]
+    \item Ánh xạ \texttt{article\_id} $\to$ vector $\mathbf{v}_i \in \mathbb{R}^{2048}$.
+    \item Xử lý key lookup linh hoạt: hỗ trợ cả dạng chuỗi gốc và zero-padded.
+    \item Khi không có feature, trả về vector $\mathbf{0}$.
+\end{itemize}
+
+\subsection{Class \texttt{NCF} — Neural Collaborative Filtering}
+
+Kiến trúc kết hợp hai nhánh song song:
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{GMF (Generalized Matrix Factorization)}:
+    \begin{equation}
+        \mathbf{h}_{GMF} = \mathbf{p}_u^{MF} \odot \mathbf{q}_i^{MF}
+    \end{equation}
+    
+    \item \textbf{MLP (Multi-Layer Perceptron)}:
+    \begin{equation}
+        \mathbf{h}_{MLP} = \sigma\!\left(
+            \mathbf{W}_L \cdots \sigma\!\left(
+                \mathbf{W}_1 \begin{bmatrix} \mathbf{p}_u^{MLP} \\ \mathbf{q}_i^{MLP} \end{bmatrix}
+                + \mathbf{b}_1
+            \right) \cdots + \mathbf{b}_L
+        \right)
+    \end{equation}
+    
+    \item \textbf{Kết hợp}:
+    \begin{equation}
+        \hat{y}_{ui} = \sigma\!\left(
+            \mathbf{w}^{\top} \begin{bmatrix} \mathbf{h}_{GMF} \\ \mathbf{h}_{MLP} \end{bmatrix}
+        \right)
+    \end{equation}
+\end{enumerate}
+
+Cấu hình mặc định: \texttt{mf\_dim=8}, MLP layers: $[64, 32, 16, 8]$,
+Dropout = 0.1 sau mỗi lớp ReLU.
+
+\subsection{Class \texttt{HybridModel} — Mô hình Hybrid}
+
+Ghép (Concatenate) vector latent từ NCF với vector visual features,
+rồi đưa qua một chuỗi Dense layers:
+
+\begin{equation}
+    \hat{y}_{ui}^{hybrid} = \sigma\!\left(
+        \text{Dense}\!\left(
+            \begin{bmatrix}
+                \mathbf{h}_{NCF} \\ \mathbf{v}_i
+            \end{bmatrix}
+        \right)
+    \right)
+\end{equation}
+
+Kiến trúc Dense layers:
+\begin{center}
+\texttt{(ncf\_dim + 2048)} $\to$ \texttt{256} $\to$ \texttt{BN + ReLU + Dropout(0.2)}
+$\to$ \texttt{64} $\to$ \texttt{BN + ReLU + Dropout(0.1)}
+$\to$ \texttt{1} $\to$ \texttt{Sigmoid}
+\end{center}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Module \texttt{metrics.py} — Đánh giá hiệu năng}
+% ═════════════════════════════════════════════════════════════════════════════
+
+Module tập trung các hàm tính toán chỉ số đánh giá:
+
+\subsection{MAP@12 — Mean Average Precision at 12}
+
+Chỉ số chính theo cuộc thi Kaggle H\&M:
+
+\begin{equation}
+    \text{MAP@12} = \frac{1}{|U|} \sum_{u \in U}
+    \frac{1}{\min(m_u, 12)}
+    \sum_{k=1}^{12} P(k) \cdot \text{rel}(k)
+\end{equation}
+
+trong đó:
+\begin{itemize}[leftmargin=2em]
+    \item $|U|$ là tổng số người dùng trong tập test.
+    \item $m_u$ là số sản phẩm thực tế mà người dùng $u$ đã mua.
+    \item $P(k)$ là precision tại vị trí $k$.
+    \item $\text{rel}(k) = 1$ nếu sản phẩm tại vị trí $k$ nằm trong tập thực tế.
+\end{itemize}
+
+\subsection{Các chỉ số bổ sung}
+
+\begin{itemize}[leftmargin=2em]
+    \item \textbf{Hit Rate@K}: Tỉ lệ người dùng có ít nhất 1 gợi ý đúng trong top-K.
+    \item \textbf{NDCG@K}: Normalized Discounted Cumulative Gain —
+          cân nhắc vị trí xếp hạng của các gợi ý đúng.
+\end{itemize}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Script \texttt{train\_hybrid.py} — Huấn luyện mô hình}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Negative Sampling}
+
+Với mỗi cặp tương tác thực $(u, i^+)$, sinh ra $N$ mẫu âm $(u, i^-)$
+bằng cách chọn ngẫu nhiên các sản phẩm mà người dùng \textit{chưa} mua:
+
+\begin{equation}
+    \mathcal{D} = \{(u, i^+, y=1)\} \cup \{(u, i^-, y=0) \mid i^- \notin \mathcal{I}_u\}
+\end{equation}
+
+Negative samples được \textbf{tái sinh mỗi epoch} để tăng tính đa dạng.
+
+\subsection{Mixed Precision Training}
+
+Sử dụng \texttt{torch.autocast} và \texttt{GradScaler} để huấn luyện
+ở chế độ FP16 trên GPU:
+
+\begin{itemize}[leftmargin=2em]
+    \item Giảm $\sim$50\% bộ nhớ GPU.
+    \item Tăng tốc $\sim$2x trên GPU hỗ trợ Tensor Cores (V100, A100, RTX 30xx+).
+    \item Gradient clipping (\texttt{max\_norm=1.0}) để ngăn gradient explosion.
+\end{itemize}
+
+\subsection{Early Stopping}
+
+\begin{itemize}[leftmargin=2em]
+    \item Theo dõi \texttt{val\_loss} sau mỗi epoch.
+    \item Nếu không cải thiện quá \texttt{min\_delta} trong \texttt{patience} epochs
+          liên tiếp $\to$ dừng huấn luyện.
+    \item Chỉ lưu checkpoint khi đạt \texttt{val\_loss} tốt nhất mới.
+\end{itemize}
+
+\subsection{Checkpoint Strategy}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{Tệp} & \textbf{Nội dung} \\
+\midrule
+\texttt{checkpoints/hybrid\_best.pt} & Weights tốt nhất (val\_loss thấp nhất) \\
+\texttt{checkpoints/hybrid\_last.pt} & Full state: model + optimizer + scheduler + scaler \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Module \texttt{app.py} — Giao diện Streamlit}
+% ═════════════════════════════════════════════════════════════════════════════
+
+Ứng dụng web tương tác cho phép:
+
+\begin{enumerate}[leftmargin=2em]
+    \item \textbf{Chọn khách hàng}: Chọn từ danh sách hoặc nhập trực tiếp \texttt{user\_id}
+          (dữ liệu từ \texttt{customers\_fixed.parquet}).
+    \item \textbf{Chọn phương pháp gợi ý}: Hybrid Model hoặc Popularity Baseline.
+    \item \textbf{Hiển thị hồ sơ}: Thông tin khách hàng (tuổi, trạng thái thành viên,
+          tần suất nhận tin thời trang).
+    \item \textbf{Hiển thị Top-12 gợi ý}: Mỗi sản phẩm hiển thị dưới dạng thẻ
+          (card) gồm tên sản phẩm, loại, màu sắc, bộ phận, nhóm sản phẩm và
+          điểm dự đoán (prediction score).
+    \item \textbf{Fallback thông minh}: Tự động chuyển sang Popularity Baseline
+          nếu không tìm thấy tệp checkpoint.
+\end{enumerate}
+
+\subsection{Luồng hoạt động}
+
+\begin{enumerate}[leftmargin=2em]
+    \item Người dùng chọn \texttt{customer\_id} từ sidebar.
+    \item Nhấn nút ``Get Recommendations''.
+    \item Hệ thống tải model từ \texttt{checkpoints/hybrid\_best.pt}.
+    \item Score tất cả sản phẩm ứng viên cho người dùng đã chọn.
+    \item Sắp xếp theo score giảm dần, lấy Top-12.
+    \item Join metadata từ \texttt{articles\_cleaned.parquet} và hiển thị.
+\end{enumerate}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Sơ đồ phụ thuộc giữa các module}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\begin{figure}[H]
+\centering
+\begin{verbatim}
+    ┌──────────────┐     ┌──────────────┐
+    │ data_loader  │     │   models     │
+    │   .py        │     │   .py        │
+    │              │     │              │
+    │ DataLoader   │     │ NCF          │
+    │ Polars       │     │ FeatureExtr. │
+    │ Popularity   │     │ HybridModel  │
+    │ Baseline     │     │              │
+    │ MF           │     │              │
+    │ calculate_   │     │              │
+    │ map12        │     │              │
+    └──────┬───────┘     └──────┬───────┘
+           │                    │
+           ▼                    ▼
+    ┌──────────────────────────────────┐
+    │       train_hybrid.py            │
+    │                                  │
+    │  NegativeSamplingDataset         │
+    │  EarlyStopping                   │
+    │  Training Loop + Mixed Precision │
+    └──────────────┬───────────────────┘
+                   │
+                   ▼
+          checkpoints/hybrid_best.pt
+                   │
+                   ▼
+    ┌──────────────────────────────────┐
+    │          app.py                  │
+    │                                  │
+    │  Streamlit UI                    │
+    │  Load Model → Score → Display   │
+    └──────────────────────────────────┘
+
+    ┌──────────────┐
+    │ metrics.py   │  ← standalone evaluation utilities
+    │              │
+    │ MAP@12       │
+    │ Hit Rate     │
+    │ NDCG@K       │
+    └──────────────┘
+\end{verbatim}
+\caption{Sơ đồ phụ thuộc giữa các module trong hệ thống}
+\end{figure}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Hướng dẫn chạy}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Cài đặt thư viện}
+\begin{lstlisting}[language=bash]
+pip install polars torch numpy streamlit
+\end{lstlisting}
+
+\subsection{Huấn luyện mô hình}
+\begin{lstlisting}[language=bash]
+python train_hybrid.py --data-dir Dataset --num-epochs 30 --batch-size 4096
+\end{lstlisting}
+
+\subsection{Chạy giao diện demo}
+\begin{lstlisting}[language=bash]
+streamlit run app.py
+\end{lstlisting}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Kết luận}
+% ═════════════════════════════════════════════════════════════════════════════
+
+Hệ thống đã được xây dựng theo kiến trúc module hoá rõ ràng, tách biệt
+giữa phần xử lý dữ liệu (\texttt{data\_loader.py}), định nghĩa mô hình
+(\texttt{models.py}), đánh giá (\texttt{metrics.py}), huấn luyện
+(\texttt{train\_hybrid.py}), và giao diện người dùng (\texttt{app.py}).
+Cách tiếp cận Hybrid cho phép tận dụng đồng thời thông tin hành vi mua sắm
+(collaborative signals) và đặc trưng thị giác (visual features) của sản phẩm,
+hứa hẹn cải thiện đáng kể chất lượng gợi ý so với baseline đơn thuần.
+
+\end{document}

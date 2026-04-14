@@ -1,116 +1,142 @@
-#  Hybrid Fashion Recommender System– Hệ thống gợi ý thời trang đa phương thức
+# Hybrid Fashion Recommender System
 
+Hybrid recommendation system for H&M fashion products, combining
+Neural Collaborative Filtering (NCF) with visual features extracted from
+product images via a pretrained ResNet-50.
 
 ## Project Overview
-Hệ thống gợi ý sản phẩm thời trang dựa trên dữ liệu hành vi người dùng và nội dung sản phẩm (metadata + hình ảnh).
 
-Giải quyết các vấn đề:
+The system recommends personalised Top-12 products for each user by fusing:
 
-Khó tìm sản phẩm phù hợp trong kho lớn
+- **Collaborative Filtering** — Matrix Factorization and NCF learn user/item
+  latent representations from purchase history.
+- **Visual Features** — 2048-dim image embeddings from ResNet-50 capture
+  visual similarity between products.
+- **Hybrid Fusion** — NCF latent vectors and visual embeddings are
+  concatenated and passed through dense layers for the final prediction.
 
-Cold start (user/item mới)
+### Problems addressed
 
-Thiếu khai thác thông tin hình ảnh trong recommendation
-
-Hệ thống sử dụng Hybrid Recommendation kết hợp Collaborative Filtering và Multimodal Learning.
+- Difficult product discovery in a large catalogue
+- Cold start for new users / items
+- Underutilised visual information in traditional CF systems
 
 ## Tech Stack
-Language: Python
 
-Data Processing: Polars / Pandas / NumPy
+| Category           | Tools                                  |
+|--------------------|----------------------------------------|
+| Language           | Python                                 |
+| Data Processing    | Polars, Pandas, NumPy                  |
+| Machine Learning   | Scikit-learn                           |
+| Deep Learning      | PyTorch                                |
+| Computer Vision    | ResNet-50 (pretrained, torchvision)    |
+| Demo               | Streamlit                              |
+| Storage            | Parquet, NPZ                           |
 
-Machine Learning: Scikit-learn
-
-Deep Learning: PyTorch / TensorFlow
-
-Computer Vision: ResNet-50 (pretrained)
-
-Deployment / Demo: Streamlit
-
-Storage: Parquet
 ## Project Structure
+
 ```
 fashion-recommender/
-├── data/                          # Raw & processed datasets
-│   ├── raw/                       # Original H&M dataset
-│   ├── processed/                 # Cleaned & encoded data (Parquet)
-│   └── images/                    # Product images
+├── data/
+│   ├── README.md                  # How to download the H&M dataset
+│   └── processed/                 # Cleaned & encoded Parquet + NPZ files
 │
 ├── src/
-│   ├── preprocessing/             # Data cleaning & encoding
-│   ├── features/                  # Feature engineering (metadata + image)
+│   ├── __init__.py
+│   ├── config.py                  # Centralised constants & hyper-parameters
+│   ├── preprocessing/
+│   │   ├── __init__.py
+│   │   └── data_loader.py        # Polars-based Parquet data loading
+│   ├── features/
+│   │   ├── __init__.py
+│   │   └── visual_feature_extractor.py
 │   ├── models/
-│   │   ├── baseline/              # Popularity model
-│   │   ├── mf/                    # Matrix Factorization
-│   │   ├── ncf/                   # Neural Collaborative Filtering
-│   │   └── hybrid/                # Hybrid model (CF + content + image)
-│   ├── evaluation/                # MAP@K, metrics
-│   └── utils/                     # Helper functions
+│   │   ├── __init__.py
+│   │   ├── popularity_baseline.py
+│   │   ├── matrix_factorization.py
+│   │   ├── ncf.py                 # Neural Collaborative Filtering
+│   │   ├── hybrid_model.py        # NCF + visual fusion model
+│   │   └── inference_pipeline.py  # High-level inference API
+│   ├── evaluation/
+│   │   ├── __init__.py
+│   │   └── metrics.py             # MAP@12, Hit Rate, NDCG
+│   └── utils/
+│       ├── __init__.py
+│       └── early_stopping.py
 │
-├── notebooks/                     # EDA & experiments
-├── app/                           # Streamlit demo
-│   └── app.py
+├── scripts/
+│   └── train_hybrid.py            # Training pipeline (CLI)
 │
-├── models/                        # Saved model weights
-├── docs/                          # Reports, diagrams
+├── app/
+│   └── app.py                     # Streamlit demo
+│
+├── checkpoints/                   # Training checkpoints (per-epoch)
+├── models/                        # Final saved model weights
+├── docs/                          # Reports, proposal, slides
+│
 ├── requirements.txt
 └── README.md
 ```
-## Core Features Implementation
-Data Preprocessing: Làm sạch, encode user/item, lọc theo thời gian
 
- Baseline Model: Popularity-based recommendation
+## Quick Start
 
- Collaborative Filtering:
+### 1. Install dependencies
 
-Matrix Factorization (MF)
+```bash
+pip install -r requirements.txt
+```
 
-Neural Collaborative Filtering (NCF)
+### 2. Prepare the data
 
- Visual Feature Extraction:
+See [`data/README.md`](data/README.md) for instructions on downloading the
+H&M dataset from Kaggle and running the preprocessing pipeline.
 
-Trích xuất embedding từ ảnh bằng ResNet-50
+### 3. Train the model
 
- Hybrid Recommendation:
+```bash
+python scripts/train_hybrid.py
+```
 
-Kết hợp CF + metadata + image features
+Common options:
 
- Evaluation:
+```bash
+python scripts/train_hybrid.py --batch-size 2048 --num-epochs 50 --lr 5e-4
+python scripts/train_hybrid.py --no-amp   # disable mixed precision
+```
 
-Metric: MAP@12
+### 4. Run the demo
 
- Demo System:
+```bash
+streamlit run app/app.py
+```
 
-Streamlit app hiển thị Top-12 sản phẩm
-## Methodology
+Select a customer ID, choose a recommendation method (Hybrid or Popularity
+Baseline), and view the personalised Top-12 products.
 
-Input Data:
+## Core Features
 
-Transactions (user behavior)
+- **Data Preprocessing** — clean, encode user/item IDs, filter by time window
+- **Popularity Baseline** — global best-sellers as a simple reference
+- **Matrix Factorization** — latent-factor MF with bias terms
+- **Neural Collaborative Filtering** — GMF + MLP dual-path architecture
+- **Visual Feature Extraction** — ResNet-50 embeddings from product images
+- **Hybrid Recommendation** — CF + visual features fused via dense layers
+- **Evaluation** — MAP@12, Hit Rate@K, NDCG@K
+- **Streamlit Demo** — interactive Top-12 display with product metadata
 
-Articles (metadata)
+## Evaluation Metric
 
-Images (visual features)
+The primary metric is **MAP@12** (Mean Average Precision at 12), consistent
+with the
+[Kaggle H&M competition](https://www.kaggle.com/competitions/h-and-m-personalized-fashion-recommendations).
 
-Models:
+## Team
 
-Baseline → MF → NCF → Hybrid
+| Name                | Student ID  |
+|---------------------|-------------|
+| Nguyen The Khai     | 202400050   |
+| Pham Gia Linh       | 202416262   |
+| Nguyen Dang Long    | 202400057   |
 
-Fusion Strategy:
-
-Concatenation / Weighted sum
-
-MLP for final prediction
-
-## Development Timeline
-
-Week 1–2: EDA & preprocessing
-
-Week 3–4: Baseline + CF (MF, NCF)
-
-Week 5–6: Image features + Hybrid model
-
-Week 7–8: Demo + report
-
-
-
+**Programme:** CTTN Computer Science — K69
+**Course:** Introduction to Artificial Intelligence
