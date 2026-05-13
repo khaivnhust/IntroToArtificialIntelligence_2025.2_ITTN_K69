@@ -54,9 +54,14 @@ def inspect_datasets():
     print("-" * 60)
     sample_train = train_df.head(3)
     joined_df = loader.join_feature_customers_article_to_transaction_df(sample_train)
-    print(f"Shape: {joined_df.shape}")
+    print(f"Shape of Joined Data: {joined_df.shape}")
+    print("Selecting key columns to avoid messy output...")
     print("-" * 60)
-    print(joined_df)
+    
+    # Select a few key columns to display neatly
+    key_cols = [col for col in ['user_id', 'item_id', 'price', 'age', 'club_member_status', 'prod_name', 'product_type_name', 'detail_desc'] if col in joined_df.columns]
+    
+    print(joined_df.select(key_cols))
     print("\n")
 
 if __name__ == "__main__":
