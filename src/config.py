@@ -12,7 +12,7 @@ CUSTOMERS_PARQUET_PATH = DATA_DIR / "customers_cleaned.parquet"
 TRAIN_PARQUET_PATH = DATA_DIR / "hm_train.parquet"
 TEST_PARQUET_PATH = DATA_DIR / "hm_test.parquet"
 VISUAL_FEATURES_NPZ_PATH = DATA_DIR / "visual_features_sample.npz"
-
+IMAGE_DIR = PROJECT_ROOT/"data"/"images"
 
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
 BEST_CHECKPOINT_PATH = CHECKPOINT_DIR / "hybrid_best.pt"
@@ -20,11 +20,11 @@ LAST_CHECKPOINT_PATH = CHECKPOINT_DIR / "hybrid_last.pt"
 
 SAVED_MODELS_DIR = PROJECT_ROOT / "models"
 
-TOP_K_RECOMMEND = 12
+TOP_K_RECOMMENDATIONS = 12
 
 #Visual Feature dimension (ResNet-50)
 VISUAL_FEATURE_DIM = 2048
-
+METADATA_FEATURE_DIM = 8
 #Model hyper parameters 
 
 MF_EMBEDDING_DIM = 16

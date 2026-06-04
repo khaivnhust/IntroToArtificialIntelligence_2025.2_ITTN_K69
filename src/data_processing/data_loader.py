@@ -10,14 +10,23 @@ from src.config import (
     TRAIN_PARQUET_PATH,
 )
 
-class DataLoaderPolar :
+class DataLoaderPolar:
     def __init__(
         self,
-        article_data_path: Path = ARTICLES_PARQUET_PATH ,
+        article_data_path: Path | None = None,
         customer_data_path: Path = CUSTOMERS_PARQUET_PATH,
         train_data_path: Path = TRAIN_PARQUET_PATH,
         test_data_path: Path = TEST_PARQUET_PATH,
+        articles_path: Path | None = None,
+        customers_path: Path | None = None,
+        train_path: Path | None = None,
+        test_path: Path | None = None,
     ) -> None:
+        article_data_path = articles_path or article_data_path or ARTICLES_PARQUET_PATH
+        customer_data_path = customers_path or customer_data_path
+        train_data_path = train_path or train_data_path
+        test_data_path = test_path or test_data_path
+
         self._article_data_path = Path(article_data_path)
         self._customer_data_path = Path(customer_data_path)
         self._train_data_path = Path(train_data_path)
@@ -59,3 +68,6 @@ class DataLoaderPolar :
             )
 
         return transactions_with_features
+
+
+DataLoaderPolars = DataLoaderPolar
