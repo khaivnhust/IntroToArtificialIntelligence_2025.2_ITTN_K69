@@ -21,16 +21,25 @@ import argparse
 import logging
 import random
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
 import numpy as np
 import polars as pl
 import torch
 import torch.nn as nn
-from torch.cuda.amp import GradScaler
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler
+
+try:
+    from torch.amp import GradScaler
+
+    _GRAD_SCALER_SUPPORTS_DEVICE_TYPE = True
+except ImportError:
+    from torch.cuda.amp import GradScaler
+
+    _GRAD_SCALER_SUPPORTS_DEVICE_TYPE = False
 
 # ---------------------------------------------------------------------------
 # Ensure project root is on sys.path so ``from src.…`` imports work when
@@ -54,8 +63,64 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(message)s",
     datefmt="%H:%M:%S",
     level=logging.INFO,
+    stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
+
+
+def should_log_progress(index: int, total: int, step: int | None = None) -> bool:
+    if total <= 0:
+        return False
+    if index == 1 or index == total:
+        return True
+    if step is not None and step > 0:
+        return index % step == 0
+    return index % max(1, total // 10) == 0
+
+
+def format_seconds(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, remaining_seconds = divmod(int(seconds), 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{remaining_minutes:02d}m{remaining_seconds:02d}s"
+    return f"{remaining_minutes}m{remaining_seconds:02d}s"
+
+
+def create_gradient_scaler(enabled: bool) -> GradScaler:
+    if _GRAD_SCALER_SUPPORTS_DEVICE_TYPE:
+        return GradScaler("cuda", enabled=enabled)
+    return GradScaler(enabled=enabled)
+
+
+class ProgressHeartbeat:
+    """Periodically log progress while a long blocking operation is running."""
+
+    def __init__(
+        self,
+        message_factory: Callable[[], str],
+        interval_seconds: int,
+    ) -> None:
+        self._message_factory = message_factory
+        self._interval_seconds = interval_seconds
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> "ProgressHeartbeat":
+        if self._interval_seconds > 0:
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.wait(self._interval_seconds):
+            logger.info("Still running: %s", self._message_factory())
 
 
 def log_runtime_environment(device: torch.device) -> None:
@@ -75,11 +140,10 @@ def log_runtime_environment(device: torch.device) -> None:
 # Negative-Sampling Dataset
 # ═══════════════════════════════════════════════════════════════════════════
 class NegativeSamplingDataset(Dataset):
-    """Creates (user, item, visual_feature, label) samples.
+    """Creates (user, item, label) samples.
 
     For every positive interaction a configurable number of negative
-    (user, random_unseen_item) pairs are generated.  Call ``resample()``
-    at the start of each training epoch to get fresh negatives.
+    (user, random_unseen_item) pairs are generated lazily.
     """
 
     def __init__(
@@ -91,75 +155,80 @@ class NegativeSamplingDataset(Dataset):
         num_negatives_per_positive: int,
         feature_extractor: VisualFeatureExtractor,
         metadata_encoder: MetadataFeatureEncoder | None = None,
+        seed: int | None = None,
     ) -> None:
         self._positive_user_ids = positive_user_ids
         self._positive_item_ids = positive_item_ids
         self._all_item_id_pool = all_item_id_pool
         self._user_to_purchased_items = user_to_purchased_items
         self._num_negatives = num_negatives_per_positive
-        self._feature_extractor = feature_extractor
-        self._metadata_encoder = metadata_encoder
+        self._rng = random.Random(seed)
 
-        # Populated by resample()
-        self._sampled_users: List[int] = []
-        self._sampled_items: List[int] = []
-        self._sampled_labels: List[float] = []
-
-        self.resample()
+        # These arguments are accepted for backward compatibility. Feature
+        # tensors are fetched by HybridBatchCollator once per batch.
+        _ = feature_extractor, metadata_encoder
 
     # ------------------------------------------------------------------
     def resample(self) -> None:
-        """Re-generate positive + negative samples (call once per epoch)."""
-        users: List[int] = []
-        items: List[int] = []
-        labels: List[float] = []
-
-        for user_id, item_id in zip(self._positive_user_ids, self._positive_item_ids):
-            user_id_int = int(user_id)
-            item_id_int = int(item_id)
-
-            # Positive sample
-            users.append(user_id_int)
-            items.append(item_id_int)
-            labels.append(1.0)
-
-            # Negative samples
-            purchased_items = self._user_to_purchased_items.get(user_id_int, set())
-            negatives_found = 0
-            max_attempts = self._num_negatives * 10
-
-            for _ in range(max_attempts):
-                if negatives_found >= self._num_negatives:
-                    break
-                candidate_item = int(random.choice(self._all_item_id_pool))
-                if candidate_item not in purchased_items:
-                    users.append(user_id_int)
-                    items.append(candidate_item)
-                    labels.append(0.0)
-                    negatives_found += 1
-
-        self._sampled_users = users
-        self._sampled_items = items
-        self._sampled_labels = labels
+        """No-op. Negative sampling is now performed lazily in __getitem__."""
+        pass
 
     # ------------------------------------------------------------------
     def __len__(self) -> int:
-        return len(self._sampled_labels)
+        return len(self._positive_user_ids) * (1 + self._num_negatives)
 
-    def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        user_tensor = torch.tensor(self._sampled_users[index], dtype=torch.long)
-        item_tensor = torch.tensor(self._sampled_items[index], dtype=torch.long)
-        label_tensor = torch.tensor(self._sampled_labels[index], dtype=torch.float32)
-        visual_tensor = self._feature_extractor.get_feature_vectors(
-            [self._sampled_items[index]]
-        ).squeeze(0)
-        if self._metadata_encoder is None:
-            metadata_tensor = torch.empty(0, dtype=torch.float32)
+    def __getitem__(self, index: int) -> Tuple[int, int, float]:
+        group_size = 1 + self._num_negatives
+        pos_index = index // group_size
+        is_positive = (index % group_size == 0)
+
+        user_id_int = int(self._positive_user_ids[pos_index])
+
+        if is_positive:
+            item_id_int = int(self._positive_item_ids[pos_index])
+            label = 1.0
         else:
-            metadata_tensor = self._metadata_encoder.get_feature_vectors(
-                [self._sampled_items[index]]
-            ).squeeze(0)
-        return user_tensor, item_tensor, visual_tensor, metadata_tensor, label_tensor
+            purchased_items = self._user_to_purchased_items.get(user_id_int, set())
+            item_id_int = int(self._positive_item_ids[pos_index])  # fallback
+            label = 0.0
+            max_attempts = max(20, self._num_negatives * 10)
+            for _ in range(max_attempts):
+                candidate_item = int(self._rng.choice(self._all_item_id_pool))
+                if candidate_item not in purchased_items:
+                    item_id_int = candidate_item
+                    break
+
+        return user_id_int, item_id_int, label
+
+
+class HybridBatchCollator:
+    """Build tensors and fetch content features once per batch."""
+
+    def __init__(
+        self,
+        feature_extractor: VisualFeatureExtractor,
+        metadata_encoder: MetadataFeatureEncoder | None = None,
+    ) -> None:
+        self._feature_extractor = feature_extractor
+        self._metadata_encoder = metadata_encoder
+
+    def __call__(
+        self,
+        batch: List[Tuple[int, int, float]],
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        user_ids, item_ids, labels = zip(*batch)
+        item_id_list = [int(item_id) for item_id in item_ids]
+
+        users = torch.tensor(user_ids, dtype=torch.long)
+        items = torch.tensor(item_id_list, dtype=torch.long)
+        label_tensor = torch.tensor(labels, dtype=torch.float32)
+        visual_tensor = self._feature_extractor.get_feature_vectors(item_id_list)
+        if self._metadata_encoder is None:
+            metadata_tensor = torch.empty((len(item_id_list), 0), dtype=torch.float32)
+        else:
+            metadata_tensor = self._metadata_encoder.get_feature_vectors(item_id_list)
+
+        return users, items, visual_tensor, metadata_tensor, label_tensor
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -189,12 +258,23 @@ def prepare_training_data(config: TrainingConfig):
     )
     train_df, test_df, _, articles_df = data_loader.load_all_dataframes()
 
+    if config.max_train_rows is not None and config.max_train_rows > 0:
+        original_train_rows = len(train_df)
+        train_df = train_df.tail(config.max_train_rows)
+        logger.info(
+            "Using last %s/%s train rows for this run.",
+            f"{len(train_df):,}",
+            f"{original_train_rows:,}",
+        )
+
     logger.info("  Train rows : %s", f"{len(train_df):,}")
     logger.info("  Test rows  : %s", f"{len(test_df):,}")
 
     # ID space
-    num_users = int(train_df["user_id"].max()) + 1
-    num_items = int(train_df["item_id"].max()) + 1
+    max_user_id = max(int(train_df["user_id"].max()), int(test_df["user_id"].max()))
+    max_item_id = max(int(train_df["item_id"].max()), int(test_df["item_id"].max()))
+    num_users = max_user_id + 1
+    num_items = max_item_id + 1
     logger.info("  num_users  : %s  |  num_items : %s", f"{num_users:,}", f"{num_items:,}")
 
     # Build user -> set(purchased items) for negative sampling
@@ -246,6 +326,47 @@ def build_item_to_article_id_mapping(articles_df: pl.DataFrame) -> Dict[int, int
     }
 
 
+def sample_negative_candidates(
+    all_items: np.ndarray,
+    excluded_items: set[int],
+    max_candidates: int,
+    rng: np.random.Generator,
+) -> list[int]:
+    """Sample negatives without scanning the whole catalogue for every user."""
+    if max_candidates <= 0:
+        return [
+            int(item_id)
+            for item_id in all_items
+            if int(item_id) not in excluded_items
+        ]
+
+    target_count = min(max_candidates, len(all_items))
+    sampled: list[int] = []
+    sampled_set: set[int] = set()
+    max_attempts = max(target_count * 20, 1000)
+
+    for _ in range(max_attempts):
+        if len(sampled) >= target_count:
+            break
+        candidate = int(rng.choice(all_items))
+        if candidate in excluded_items or candidate in sampled_set:
+            continue
+        sampled.append(candidate)
+        sampled_set.add(candidate)
+
+    if len(sampled) < target_count:
+        for item_id in all_items:
+            candidate = int(item_id)
+            if candidate in excluded_items or candidate in sampled_set:
+                continue
+            sampled.append(candidate)
+            sampled_set.add(candidate)
+            if len(sampled) >= target_count:
+                break
+
+    return sampled
+
+
 def evaluate_map_at_12_on_test(
     model: HybridRecommendationModel,
     test_df: pl.DataFrame,
@@ -256,6 +377,9 @@ def evaluate_map_at_12_on_test(
     user_to_purchased_items: Dict[int, set],
     max_negative_candidates_per_user: int = 1000,
     random_seed: int = 42,
+    batch_size: int = 4096,
+    max_eval_users: int | None = None,
+    heartbeat_interval_seconds: int = 30,
 ) -> float:
     """Score candidate items per test user and compute MAP@12.
 
@@ -271,51 +395,90 @@ def evaluate_map_at_12_on_test(
         pl.col("item_id").alias("items")
     )
 
+    total_users = test_grouped.height
+    target_users = min(total_users, max_eval_users) if max_eval_users is not None else total_users
     predictions: Dict[int, List[int]] = {}
+    progress_state = {
+        "scored_users": 0,
+        "target_users": target_users,
+        "last_candidates": 0,
+        "elapsed_start": time.time(),
+    }
+
+    logger.info(
+        "Final MAP@12 evaluation: scoring %s/%s users with up to %s negatives/user ...",
+        f"{target_users:,}",
+        f"{total_users:,}",
+        f"{max_negative_candidates_per_user:,}",
+    )
 
     with torch.no_grad():
-        for row in test_grouped.iter_rows(named=True):
-            user_id = int(row["user_id"])
-            actual_items = set(int(item_id) for item_id in row["items"])
-            seen_items = set(user_to_purchased_items.get(user_id, set()))
-            negative_pool = [
-                int(item_id)
-                for item_id in all_items
-                if int(item_id) not in actual_items and int(item_id) not in seen_items
-            ]
+        with ProgressHeartbeat(
+            lambda: (
+                "MAP@12 evaluation "
+                f"{progress_state['scored_users']:,}/{progress_state['target_users']:,} users scored; "
+                f"last_candidates={progress_state['last_candidates']:,}; "
+                f"elapsed={format_seconds(time.time() - progress_state['elapsed_start'])}"
+            ),
+            heartbeat_interval_seconds,
+        ):
+            for user_index, row in enumerate(test_grouped.iter_rows(named=True), start=1):
+                if max_eval_users is not None and user_index > max_eval_users:
+                    break
 
-            if max_negative_candidates_per_user and len(negative_pool) > max_negative_candidates_per_user:
-                sampled_negatives = rng.choice(
-                    negative_pool,
-                    size=max_negative_candidates_per_user,
-                    replace=False,
-                ).tolist()
-            else:
-                sampled_negatives = negative_pool
+                user_id = int(row["user_id"])
+                actual_items = set(int(item_id) for item_id in row["items"])
+                seen_items = set(user_to_purchased_items.get(user_id, set()))
+                excluded_items = actual_items | seen_items
+                sampled_negatives = sample_negative_candidates(
+                    all_items=all_items,
+                    excluded_items=excluded_items,
+                    max_candidates=max_negative_candidates_per_user,
+                    rng=rng,
+                )
 
-            candidate_item_ids = list(actual_items) + [int(item_id) for item_id in sampled_negatives]
+                candidate_item_ids = list(actual_items) + [int(item_id) for item_id in sampled_negatives]
+                progress_state["last_candidates"] = len(candidate_item_ids)
 
-            if not candidate_item_ids:
-                continue
+                if not candidate_item_ids:
+                    continue
 
-            user_tensor = torch.tensor(
-                [user_id] * len(candidate_item_ids), dtype=torch.long, device=device
-            )
-            item_tensor = torch.tensor(
-                candidate_item_ids, dtype=torch.long, device=device
-            )
-            visual_tensor = feature_extractor.get_feature_vectors(
-                candidate_item_ids
-            ).to(device)
-            metadata_tensor = (
-                metadata_encoder.get_feature_vectors(candidate_item_ids).to(device)
-                if metadata_encoder is not None
-                else None
-            )
+                score_chunks: list[np.ndarray] = []
+                for start_index in range(0, len(candidate_item_ids), batch_size):
+                    batch_item_ids = candidate_item_ids[start_index : start_index + batch_size]
+                    user_tensor = torch.full(
+                        (len(batch_item_ids),), user_id, dtype=torch.long, device=device
+                    )
+                    item_tensor = torch.tensor(
+                        batch_item_ids, dtype=torch.long, device=device
+                    )
+                    visual_tensor = feature_extractor.get_feature_vectors(
+                        batch_item_ids
+                    ).to(device)
+                    metadata_tensor = (
+                        metadata_encoder.get_feature_vectors(batch_item_ids).to(device)
+                        if metadata_encoder is not None
+                        else None
+                    )
+                    score_chunks.append(
+                        model(user_tensor, item_tensor, visual_tensor, metadata_tensor).cpu().numpy()
+                    )
 
-            scores = model(user_tensor, item_tensor, visual_tensor, metadata_tensor).cpu().numpy()
-            top_12_indices = np.argsort(scores)[::-1][:12]
-            predictions[user_id] = [candidate_item_ids[i] for i in top_12_indices]
+                scores = np.concatenate(score_chunks)
+                top_12_indices = np.argsort(scores)[::-1][:12]
+                predictions[user_id] = [candidate_item_ids[i] for i in top_12_indices]
+                progress_state["scored_users"] = len(predictions)
+
+                if should_log_progress(len(predictions), target_users, step=max(1, target_users // 10)):
+                    logger.info(
+                        "Final MAP@12 evaluation: %s/%s users scored.",
+                        f"{len(predictions):,}",
+                        f"{target_users:,}",
+                    )
+
+    if max_eval_users is not None:
+        evaluated_user_ids = list(predictions.keys())
+        test_df = test_df.filter(pl.col("user_id").is_in(evaluated_user_ids))
 
     return calculate_map_at_12(predictions, test_df)
 
@@ -392,7 +555,7 @@ def train(config: TrainingConfig) -> None:
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", patience=2, factor=0.5, min_lr=1e-6
     )
-    gradient_scaler = GradScaler(enabled=use_mixed_precision)
+    gradient_scaler = create_gradient_scaler(use_mixed_precision)
 
     # -- Early stopping -------------------------------------------------------
     early_stopper = EarlyStopping(
@@ -400,6 +563,7 @@ def train(config: TrainingConfig) -> None:
         min_delta=config.early_stopping_min_delta,
         checkpoint_path=best_checkpoint_path,
     )
+    hybrid_collator = HybridBatchCollator(feature_extractor, metadata_encoder)
 
     # -- Validation dataset (fewer negatives for speed) -----------------------
     validation_dataset = NegativeSamplingDataset(
@@ -410,6 +574,7 @@ def train(config: TrainingConfig) -> None:
         num_negatives_per_positive=1,
         feature_extractor=feature_extractor,
         metadata_encoder=metadata_encoder,
+        seed=config.random_seed + 1000,
     )
     validation_data_loader = DataLoader(
         validation_dataset,
@@ -417,6 +582,7 @@ def train(config: TrainingConfig) -> None:
         shuffle=False,
         num_workers=config.dataloader_num_workers,
         pin_memory=(device.type == "cuda"),
+        collate_fn=hybrid_collator,
     )
 
     # -- Training loop --------------------------------------------------------
@@ -427,8 +593,8 @@ def train(config: TrainingConfig) -> None:
     for epoch in range(1, config.num_epochs + 1):
         epoch_start_time = time.time()
 
-        # 1. Resample negatives for this epoch
-        logger.info("Epoch %d/%d — resampling negatives ...", epoch, config.num_epochs)
+        # 1. Build lazy negative-sampling dataset for this epoch
+        logger.info("Epoch %d/%d | preparing lazy negative sampler ...", epoch, config.num_epochs)
         training_dataset = NegativeSamplingDataset(
             positive_user_ids=train_user_ids,
             positive_item_ids=train_item_ids,
@@ -437,80 +603,199 @@ def train(config: TrainingConfig) -> None:
             num_negatives_per_positive=config.num_negatives_per_positive,
             feature_extractor=feature_extractor,
             metadata_encoder=metadata_encoder,
+            seed=config.random_seed + epoch,
+        )
+        sampler_generator = torch.Generator()
+        sampler_generator.manual_seed(config.random_seed + epoch)
+        training_sampler = RandomSampler(
+            training_dataset,
+            replacement=True,
+            num_samples=len(training_dataset),
+            generator=sampler_generator,
         )
         training_data_loader = DataLoader(
             training_dataset,
             batch_size=config.batch_size,
-            shuffle=True,
+            sampler=training_sampler,
             num_workers=config.dataloader_num_workers,
             pin_memory=(device.type == "cuda"),
+            collate_fn=hybrid_collator,
         )
 
         # 2. Train one epoch
         model.train()
         epoch_loss_sum = 0.0
         total_batches = len(training_data_loader)
+        progress_step = (
+            config.log_every_n_batches
+            if config.log_every_n_batches > 0
+            else max(1, total_batches // 10)
+        )
+        completed_batches = 0
+        progress_state = {
+            "phase": "starting",
+            "current_batch": 0,
+            "completed_batches": 0,
+            "total_batches": total_batches,
+            "last_loss": None,
+            "elapsed_start": epoch_start_time,
+        }
+        logger.info(
+            "Epoch %d/%d | training samples=%s | batches=%s | batch_size=%s | sampler=replacement",
+            epoch,
+            config.num_epochs,
+            f"{len(training_dataset):,}",
+            f"{total_batches:,}",
+            f"{config.batch_size:,}",
+        )
+        logger.info(
+            "Epoch %d/%d | replacement sampler avoids allocating a huge shuffle permutation.",
+            epoch,
+            config.num_epochs,
+        )
 
-        for batch_index, (users, items, visuals, metadata, labels) in enumerate(training_data_loader, 1):
-            users = users.to(device, non_blocking=True)
-            items = items.to(device, non_blocking=True)
-            visuals = visuals.to(device, non_blocking=True)
-            metadata = metadata.to(device, non_blocking=True)
-            labels = labels.to(device, non_blocking=True)
+        training_iterator = iter(training_data_loader)
+        with ProgressHeartbeat(
+            lambda: (
+                f"epoch {epoch}/{config.num_epochs} {progress_state['phase']}; "
+                f"batch={progress_state['current_batch']:,}/{progress_state['total_batches']:,}; "
+                f"completed={progress_state['completed_batches']:,}; "
+                f"last_loss={progress_state['last_loss']}; "
+                f"elapsed={format_seconds(time.time() - progress_state['elapsed_start'])}"
+            ),
+            config.heartbeat_interval_seconds,
+        ):
+            for batch_index in range(1, total_batches + 1):
+                progress_state["phase"] = "loading batch"
+                progress_state["current_batch"] = batch_index
+                batch_load_started_at = time.time()
+                try:
+                    users, items, visuals, metadata, labels = next(training_iterator)
+                except StopIteration:
+                    break
+                batch_load_seconds = time.time() - batch_load_started_at
 
-            optimizer.zero_grad(set_to_none=True)
+                progress_state["phase"] = "training batch"
+                batch_train_started_at = time.time()
+                users = users.to(device, non_blocking=True)
+                items = items.to(device, non_blocking=True)
+                visuals = visuals.to(device, non_blocking=True)
+                metadata = metadata.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
 
-            with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
-                predictions = model(users, items, visuals, metadata)
-                batch_loss = loss_function(predictions, labels)
+                optimizer.zero_grad(set_to_none=True)
 
-            gradient_scaler.scale(batch_loss).backward()
-            gradient_scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            gradient_scaler.step(optimizer)
-            gradient_scaler.update()
+                with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
+                    predictions = model(users, items, visuals, metadata)
+                    batch_loss = loss_function(predictions, labels)
 
-            epoch_loss_sum += batch_loss.item()
+                gradient_scaler.scale(batch_loss).backward()
+                gradient_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                gradient_scaler.step(optimizer)
+                gradient_scaler.update()
 
-            # Log progress ~5 times per epoch
-            if batch_index % max(1, total_batches // 5) == 0:
-                logger.info(
-                    "  [%5d/%d]  batch_loss=%.5f",
-                    batch_index,
-                    total_batches,
-                    batch_loss.item(),
-                )
+                batch_loss_value = batch_loss.item()
+                batch_train_seconds = time.time() - batch_train_started_at
+                epoch_loss_sum += batch_loss_value
+                completed_batches += 1
+                progress_state["phase"] = "completed batch"
+                progress_state["completed_batches"] = completed_batches
+                progress_state["last_loss"] = f"{batch_loss_value:.5f}"
 
-        average_train_loss = epoch_loss_sum / total_batches
+                if should_log_progress(completed_batches, total_batches, step=progress_step):
+                    logger.info(
+                        "Epoch %d/%d | batch %s/%s | loss=%.5f | load=%s | train=%s",
+                        epoch,
+                        config.num_epochs,
+                        f"{completed_batches:,}",
+                        f"{total_batches:,}",
+                        batch_loss_value,
+                        format_seconds(batch_load_seconds),
+                        format_seconds(batch_train_seconds),
+                    )
+
+        average_train_loss = epoch_loss_sum / max(completed_batches, 1)
 
         # 3. Validation
         if epoch % config.evaluate_every_n_epochs == 0:
             model.eval()
             validation_loss_sum = 0.0
+            validation_batches = len(validation_data_loader)
+            completed_validation_batches = 0
+            validation_progress_state = {
+                "phase": "starting validation",
+                "current_batch": 0,
+                "completed_batches": 0,
+                "total_batches": validation_batches,
+                "elapsed_start": time.time(),
+            }
+            logger.info(
+                "Epoch %d/%d | validation samples=%s | batches=%s",
+                epoch,
+                config.num_epochs,
+                f"{len(validation_dataset):,}",
+                f"{validation_batches:,}",
+            )
 
             with torch.no_grad():
-                for users, items, visuals, metadata, labels in validation_data_loader:
-                    users = users.to(device, non_blocking=True)
-                    items = items.to(device, non_blocking=True)
-                    visuals = visuals.to(device, non_blocking=True)
-                    metadata = metadata.to(device, non_blocking=True)
-                    labels = labels.to(device, non_blocking=True)
+                validation_iterator = iter(validation_data_loader)
+                with ProgressHeartbeat(
+                    lambda: (
+                        f"epoch {epoch}/{config.num_epochs} validation "
+                        f"{validation_progress_state['phase']}; "
+                        f"batch={validation_progress_state['current_batch']:,}/{validation_progress_state['total_batches']:,}; "
+                        f"completed={validation_progress_state['completed_batches']:,}; "
+                        f"elapsed={format_seconds(time.time() - validation_progress_state['elapsed_start'])}"
+                    ),
+                    config.heartbeat_interval_seconds,
+                ):
+                    for validation_batch_index in range(1, validation_batches + 1):
+                        validation_progress_state["phase"] = "loading batch"
+                        validation_progress_state["current_batch"] = validation_batch_index
+                        try:
+                            users, items, visuals, metadata, labels = next(validation_iterator)
+                        except StopIteration:
+                            break
 
-                    with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
-                        predictions = model(users, items, visuals, metadata)
-                        batch_loss = loss_function(predictions, labels)
+                        validation_progress_state["phase"] = "running batch"
+                        users = users.to(device, non_blocking=True)
+                        items = items.to(device, non_blocking=True)
+                        visuals = visuals.to(device, non_blocking=True)
+                        metadata = metadata.to(device, non_blocking=True)
+                        labels = labels.to(device, non_blocking=True)
 
-                    validation_loss_sum += batch_loss.item()
+                        with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
+                            predictions = model(users, items, visuals, metadata)
+                            batch_loss = loss_function(predictions, labels)
 
-            average_validation_loss = validation_loss_sum / len(validation_data_loader)
+                        validation_loss_sum += batch_loss.item()
+                        completed_validation_batches += 1
+                        validation_progress_state["phase"] = "completed batch"
+                        validation_progress_state["completed_batches"] = completed_validation_batches
+
+                        if should_log_progress(
+                            completed_validation_batches,
+                            validation_batches,
+                            step=max(1, validation_batches // 5),
+                        ):
+                            logger.info(
+                                "Epoch %d/%d | validation batch %s/%s",
+                                epoch,
+                                config.num_epochs,
+                                f"{completed_validation_batches:,}",
+                                f"{validation_batches:,}",
+                            )
+
+            average_validation_loss = validation_loss_sum / max(completed_validation_batches, 1)
             epoch_elapsed_seconds = time.time() - epoch_start_time
 
             logger.info(
-                "Epoch %3d | train_loss=%.5f | val_loss=%.5f | %.1fs",
+                "Epoch %3d | train_loss=%.5f | val_loss=%.5f | %s",
                 epoch,
                 average_train_loss,
                 average_validation_loss,
-                epoch_elapsed_seconds,
+                format_seconds(epoch_elapsed_seconds),
             )
 
             lr_scheduler.step(average_validation_loss)
@@ -552,6 +837,9 @@ def train(config: TrainingConfig) -> None:
         all_item_id_pool=all_item_id_pool,
         user_to_purchased_items=user_to_purchased_items,
         random_seed=config.random_seed,
+        batch_size=config.eval_batch_size,
+        max_eval_users=config.max_eval_users,
+        heartbeat_interval_seconds=config.heartbeat_interval_seconds,
     )
     logger.info("Final MAP@12 on test set: %.6f", map_at_12_score)
     logger.info("=" * 70)
@@ -576,6 +864,11 @@ def parse_command_line_arguments() -> TrainingConfig:
     parser.add_argument("--num-negatives", type=int, default=4)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--max-train-rows", type=int, default=None)
+    parser.add_argument("--log-every-batches", type=int, default=0)
+    parser.add_argument("--heartbeat-seconds", type=int, default=30)
+    parser.add_argument("--max-eval-users", type=int, default=None)
+    parser.add_argument("--eval-batch-size", type=int, default=4096)
     parser.add_argument("--no-amp", action="store_true", help="Disable Mixed Precision")
     args = parser.parse_args()
 
@@ -588,6 +881,11 @@ def parse_command_line_arguments() -> TrainingConfig:
         early_stopping_patience=args.patience,
         random_seed=args.seed,
         use_mixed_precision=not args.no_amp,
+        max_train_rows=args.max_train_rows,
+        log_every_n_batches=args.log_every_batches,
+        heartbeat_interval_seconds=args.heartbeat_seconds,
+        max_eval_users=args.max_eval_users,
+        eval_batch_size=args.eval_batch_size,
     )
 
     if args.data_dir:

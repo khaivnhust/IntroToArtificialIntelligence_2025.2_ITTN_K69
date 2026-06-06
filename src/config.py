@@ -51,6 +51,7 @@ class TrainingConfig:
     num_epochs: int = 30
     learning_rate: float = 1e-3
     weight_decay: float = 1e-5
+    max_train_rows: int | None = None
 
     # Early stopping
     early_stopping_patience: int = 5
@@ -61,3 +62,7 @@ class TrainingConfig:
     dataloader_num_workers: int = 0   # keep 0 on Windows to avoid issues
     use_mixed_precision: bool = True  # requires CUDA
     evaluate_every_n_epochs: int = 1
+    log_every_n_batches: int = 0       # 0 = automatic progress interval
+    heartbeat_interval_seconds: int = 30
+    max_eval_users: int | None = None
+    eval_batch_size: int = INFERENCE_BATCH_SIZE
