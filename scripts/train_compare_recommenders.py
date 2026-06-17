@@ -30,7 +30,12 @@ import numpy as np
 import polars as pl
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler
+
+try:
+    from torch.amp import GradScaler
+except ImportError:  # pragma: no cover - compatibility with older PyTorch
+    from torch.cuda.amp import GradScaler
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -61,6 +66,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+
+def create_gradient_scaler(enabled: bool) -> GradScaler:
+    try:
+        return GradScaler("cuda", enabled=enabled)
+    except TypeError:  # pragma: no cover - compatibility with older PyTorch
+        return GradScaler(enabled=enabled)
 
 
 def log_runtime_environment(device: torch.device) -> None:
@@ -94,7 +106,7 @@ class EvaluationData:
 
 
 class ImplicitFeedbackDataset(Dataset):
-    """Positive interactions plus sampled user-specific negatives."""
+    """Positive interactions plus lazily sampled user-specific negatives."""
 
     def __init__(
         self,
@@ -110,50 +122,53 @@ class ImplicitFeedbackDataset(Dataset):
         self._all_item_id_pool = all_item_id_pool
         self._user_to_seen_items = user_to_seen_items
         self._num_negatives = num_negatives_per_positive
-        self._rng = random.Random(seed)
-        self.users: list[int] = []
-        self.items: list[int] = []
-        self.labels: list[float] = []
-        self.resample()
+        self._seed = int(seed)
+        self._pool_size = len(all_item_id_pool)
+        if self._pool_size <= 0:
+            raise ValueError("all_item_id_pool must not be empty.")
 
     def resample(self) -> None:
-        users: list[int] = []
-        items: list[int] = []
-        labels: list[float] = []
-
-        for user_id, item_id in zip(self._positive_user_ids, self._positive_item_ids):
-            user_id = int(user_id)
-            item_id = int(item_id)
-            users.append(user_id)
-            items.append(item_id)
-            labels.append(1.0)
-
-            seen_items = self._user_to_seen_items.get(user_id, set())
-            negatives_found = 0
-            max_attempts = max(20, self._num_negatives * 20)
-            for _ in range(max_attempts):
-                if negatives_found >= self._num_negatives:
-                    break
-                candidate = int(self._rng.choice(self._all_item_id_pool))
-                if candidate not in seen_items:
-                    users.append(user_id)
-                    items.append(candidate)
-                    labels.append(0.0)
-                    negatives_found += 1
-
-        self.users = users
-        self.items = items
-        self.labels = labels
+        """No-op kept for compatibility; sampling happens in __getitem__."""
+        pass
 
     def __len__(self) -> int:
-        return len(self.labels)
+        return len(self._positive_user_ids) * (1 + self._num_negatives)
 
     def __getitem__(self, index: int):
-        return (
-            torch.tensor(self.users[index], dtype=torch.long),
-            torch.tensor(self.items[index], dtype=torch.long),
-            torch.tensor(self.labels[index], dtype=torch.float32),
-        )
+        group_size = 1 + self._num_negatives
+        positive_index = index // group_size
+        is_positive = index % group_size == 0
+
+        user_id = int(self._positive_user_ids[positive_index])
+        positive_item_id = int(self._positive_item_ids[positive_index])
+        if is_positive:
+            return user_id, positive_item_id, 1.0
+
+        seen_items = self._user_to_seen_items.get(user_id, set())
+        item_id = positive_item_id
+        max_attempts = max(20, self._num_negatives * 10)
+        state = (self._seed ^ ((index + 1) * 0x9E3779B97F4A7C15)) & 0xFFFFFFFFFFFFFFFF
+        for attempt in range(max_attempts):
+            state = (
+                state * 6364136223846793005
+                + 1442695040888963407
+                + attempt
+            ) & 0xFFFFFFFFFFFFFFFF
+            candidate = int(self._all_item_id_pool[state % self._pool_size])
+            if candidate not in seen_items:
+                item_id = candidate
+                break
+
+        return user_id, item_id, 0.0
+
+
+def implicit_feedback_collate(batch):
+    user_ids, item_ids, labels = zip(*batch)
+    return (
+        torch.tensor(user_ids, dtype=torch.long),
+        torch.tensor(item_ids, dtype=torch.long),
+        torch.tensor(labels, dtype=torch.float32),
+    )
 
 
 def parse_model_list(value: str) -> list[str]:
@@ -354,12 +369,15 @@ def train_collaborative_model(
     device: torch.device,
     checkpoint_path: Path,
     seed: int,
+    use_mixed_precision: bool,
 ) -> list[dict[str, float]]:
     model = model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
     loss_fn = nn.BCEWithLogitsLoss()
+    gradient_scaler = create_gradient_scaler(use_mixed_precision)
     history: list[dict[str, float]] = []
     best_validation_loss = float("inf")
+    data_loader_workers = 4
 
     validation_dataset = ImplicitFeedbackDataset(
         validation_user_ids,
@@ -369,7 +387,14 @@ def train_collaborative_model(
         num_negatives_per_positive=1,
         seed=seed + 1000,
     )
-    validation_loader = DataLoader(validation_dataset, batch_size=batch_size * 2, shuffle=False)
+    validation_loader = DataLoader(
+        validation_dataset,
+        batch_size=batch_size * 2,
+        shuffle=False,
+        num_workers=data_loader_workers,
+        pin_memory=(device.type == "cuda"),
+        collate_fn=implicit_feedback_collate,
+    )
 
     for epoch in range(1, num_epochs + 1):
         start_time = time.time()
@@ -381,32 +406,52 @@ def train_collaborative_model(
             num_negatives_per_positive=num_negatives,
             seed=seed + epoch,
         )
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        sampler_generator = torch.Generator()
+        sampler_generator.manual_seed(seed + epoch)
+        training_sampler = RandomSampler(
+            train_dataset,
+            replacement=True,
+            num_samples=len(train_dataset),
+            generator=sampler_generator,
+        )
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=training_sampler,
+            num_workers=data_loader_workers,
+            pin_memory=(device.type == "cuda"),
+            collate_fn=implicit_feedback_collate,
+        )
         logger.info(
-            "%s epoch %d/%d | training samples=%s | batches=%s",
+            "%s epoch %d/%d | training samples=%s | batches=%s | sampler=replacement | amp=%s",
             model_name,
             epoch,
             num_epochs,
             f"{len(train_dataset):,}",
             f"{len(train_loader):,}",
+            use_mixed_precision,
         )
 
         model.train()
         train_loss_sum = 0.0
         total_batches = len(train_loader)
         for batch_index, (users, items, labels) in enumerate(train_loader, start=1):
-            users = users.to(device)
-            items = items.to(device)
-            labels = labels.to(device)
+            users = users.to(device, non_blocking=True)
+            items = items.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
-            logits = model(users, items)
-            loss = loss_fn(logits, labels)
-            loss.backward()
+            with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
+                logits = model(users, items)
+                loss = loss_fn(logits, labels)
+
+            gradient_scaler.scale(loss).backward()
+            gradient_scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            gradient_scaler.step(optimizer)
+            gradient_scaler.update()
             train_loss_sum += loss.item()
-            if should_log_progress(batch_index, total_batches, step=max(1, total_batches // 5)):
+            if should_log_progress(batch_index, total_batches, step=500):
                 logger.info(
                     "%s epoch %d/%d | batch %s/%s | batch_loss=%.5f",
                     model_name,
@@ -418,7 +463,13 @@ def train_collaborative_model(
                 )
 
         train_loss = train_loss_sum / max(len(train_loader), 1)
-        validation_loss = evaluate_bce_loss(model, validation_loader, loss_fn, device)
+        validation_loss = evaluate_bce_loss(
+            model,
+            validation_loader,
+            loss_fn,
+            device,
+            use_mixed_precision,
+        )
         elapsed = time.time() - start_time
 
         history.append(
@@ -454,15 +505,17 @@ def evaluate_bce_loss(
     data_loader: DataLoader,
     loss_fn: nn.Module,
     device: torch.device,
+    use_mixed_precision: bool = False,
 ) -> float:
     model.eval()
     loss_sum = 0.0
     with torch.no_grad():
         for users, items, labels in data_loader:
-            users = users.to(device)
-            items = items.to(device)
-            labels = labels.to(device)
-            loss_sum += loss_fn(model(users, items), labels).item()
+            users = users.to(device, non_blocking=True)
+            items = items.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
+            with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
+                loss_sum += loss_fn(model(users, items), labels).item()
     return loss_sum / max(len(data_loader), 1)
 
 
@@ -471,6 +524,7 @@ def evaluate_torch_cf_model(
     evaluation_data: EvaluationData,
     device: torch.device,
     batch_size: int,
+    use_mixed_precision: bool = False,
 ) -> dict[str, float]:
     model.eval()
     predictions: dict[int, list[int]] = {}
@@ -485,7 +539,8 @@ def evaluate_torch_cf_model(
                 batch_items = candidates[start : start + batch_size]
                 users = torch.full((len(batch_items),), user_id, dtype=torch.long, device=device)
                 items = torch.tensor(batch_items, dtype=torch.long, device=device)
-                batch_scores = model(users, items).detach().cpu().numpy().tolist()
+                with torch.autocast(device_type=device.type, enabled=use_mixed_precision):
+                    batch_scores = model(users, items).detach().cpu().numpy().tolist()
                 scores.extend(float(score) for score in batch_scores)
 
             top_indices = np.argsort(scores)[::-1][:TOP_K_RECOMMENDATIONS]
@@ -590,6 +645,9 @@ def plot_results(
     output_dir: Path,
 ) -> None:
     try:
+        import matplotlib
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
         logger.warning("matplotlib is not installed; CSV files were written but plots were skipped.")
@@ -658,6 +716,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--validation-fraction", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--no-amp", action="store_true", help="Disable AMP for MF/NCF training and evaluation.")
     return parser.parse_args()
 
 
@@ -668,6 +727,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     log_runtime_environment(device)
+    use_mixed_precision = device.type == "cuda" and not args.no_amp
+    logger.info("MF/NCF Mixed Precision: %s", use_mixed_precision)
 
     train_df, test_df, articles_df = load_data(args.data_dir, args.max_train_rows)
     user_to_seen_items = build_user_to_seen_items(train_df)
@@ -693,11 +754,6 @@ def main() -> None:
     metrics_rows: list[dict[str, str | float]] = []
     histories: dict[str, list[dict[str, float]]] = {}
 
-    if "popularity" in args.models:
-        logger.info("Evaluating Popularity baseline ...")
-        metrics = evaluate_popularity(train_df, evaluation_data)
-        metrics_rows.append({"model": "Popularity", **metrics})
-
     train_user_ids, train_item_ids, val_user_ids, val_item_ids = split_train_validation(
         train_df, args.validation_fraction
     )
@@ -722,9 +778,16 @@ def main() -> None:
             device=device,
             checkpoint_path=args.checkpoint_dir / "mf_best.pt",
             seed=args.seed,
+            use_mixed_precision=use_mixed_precision,
         )
         histories["MF"] = history
-        metrics = evaluate_torch_cf_model(mf_model, evaluation_data, device, args.batch_size)
+        metrics = evaluate_torch_cf_model(
+            mf_model,
+            evaluation_data,
+            device,
+            args.batch_size,
+            use_mixed_precision=use_mixed_precision,
+        )
         metrics_rows.append({"model": "MF", **metrics})
 
     if "ncf" in args.models:
@@ -752,10 +815,22 @@ def main() -> None:
             device=device,
             checkpoint_path=args.checkpoint_dir / "ncf_best.pt",
             seed=args.seed + 10,
+            use_mixed_precision=use_mixed_precision,
         )
         histories["NCF"] = history
-        metrics = evaluate_torch_cf_model(ncf_model, evaluation_data, device, args.batch_size)
+        metrics = evaluate_torch_cf_model(
+            ncf_model,
+            evaluation_data,
+            device,
+            args.batch_size,
+            use_mixed_precision=use_mixed_precision,
+        )
         metrics_rows.append({"model": "NCF", **metrics})
+
+    if "popularity" in args.models:
+        logger.info("Evaluating Popularity baseline ...")
+        metrics = evaluate_popularity(train_df, evaluation_data)
+        metrics_rows.append({"model": "Popularity", **metrics})
 
     if "hybrid" in args.models:
         logger.info("Evaluating Hybrid checkpoint ...")
