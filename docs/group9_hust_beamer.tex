@@ -1,0 +1,563 @@
+\documentclass[aspectratio=169,10pt]{beamer}
+
+% Compile with XeLaTeX or LuaLaTeX for best Vietnamese support:
+%   xelatex group9_hust_beamer.tex
+%   xelatex group9_hust_beamer.tex
+
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[utf8]{inputenc}
+  \usepackage[T5]{fontenc}
+  \usepackage[vietnamese]{babel}
+\else
+  \usepackage{fontspec}
+  \usepackage[vietnamese]{babel}
+  \IfFontExistsTF{Arial}{\setsansfont{Arial}}{\setsansfont{TeX Gyre Heros}}
+  \renewcommand{\familydefault}{\sfdefault}
+\fi
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{array}
+\usetikzlibrary{arrows.meta,positioning,fit}
+
+% ---------------------------------------------------------------------------
+% HUST-inspired visual style
+% ---------------------------------------------------------------------------
+\definecolor{HUSTRed}{HTML}{B01116}
+\definecolor{HUSTDark}{HTML}{1F2933}
+\definecolor{HUSTGold}{HTML}{F2A900}
+\definecolor{HUSTGray}{HTML}{F5F6F8}
+\definecolor{HUSTLine}{HTML}{D9DEE7}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{headline}{}
+\setbeamertemplate{footline}{
+  \leavevmode%
+  \hbox{%
+    \begin{beamercolorbox}[wd=.72\paperwidth,ht=2.6ex,dp=1.2ex,leftskip=1.8em]{author in head/foot}%
+      \usebeamerfont{author in head/foot}Hybrid Fashion Recommender System -- Group 9
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.28\paperwidth,ht=2.6ex,dp=1.2ex,rightskip=1.8em plus1fil]{date in head/foot}%
+      \usebeamerfont{date in head/foot}\insertframenumber/\inserttotalframenumber
+    \end{beamercolorbox}%
+  }%
+}
+
+\setbeamercolor{normal text}{fg=HUSTDark,bg=white}
+\setbeamercolor{frametitle}{fg=white,bg=HUSTRed}
+\setbeamercolor{title}{fg=white,bg=HUSTRed}
+\setbeamercolor{subtitle}{fg=white}
+\setbeamercolor{author in head/foot}{fg=white,bg=HUSTDark}
+\setbeamercolor{date in head/foot}{fg=white,bg=HUSTRed}
+\setbeamercolor{block title}{fg=white,bg=HUSTRed}
+\setbeamercolor{block body}{fg=HUSTDark,bg=HUSTGray}
+\setbeamercolor{alerted text}{fg=HUSTRed}
+\setbeamercolor{itemize item}{fg=HUSTRed}
+\setbeamercolor{itemize subitem}{fg=HUSTGold}
+\setbeamercolor{enumerate item}{fg=HUSTRed}
+\setbeamerfont{title}{series=\bfseries,size=\Large}
+\setbeamerfont{subtitle}{size=\normalsize}
+\setbeamerfont{frametitle}{series=\bfseries,size=\large}
+\setbeamerfont{block title}{series=\bfseries}
+
+\setbeamertemplate{frametitle}{
+  \nointerlineskip
+  \begin{beamercolorbox}[wd=\paperwidth,ht=3.2ex,dp=1.1ex,leftskip=1.1em]{frametitle}
+    \insertframetitle
+  \end{beamercolorbox}
+}
+\setbeamertemplate{itemize item}{\color{HUSTRed}\small$\blacktriangleright$}
+\setbeamertemplate{itemize subitem}{\color{HUSTGold}\scriptsize$\bullet$}
+
+\newcommand{\hustbar}{\tikz[baseline=-0.5ex]\fill[HUSTGold] (0,0) rectangle (1.1cm,0.08cm);}
+\newcommand{\placeholder}[2]{%
+  \begin{tikzpicture}
+    \node[
+      draw=HUSTLine,
+      fill=HUSTGray,
+      minimum width=#1,
+      minimum height=#2,
+      align=center,
+      rounded corners=2pt,
+      inner sep=6pt
+    ] {\small\textcolor{HUSTDark}{Placeholder}\\[-2pt]\scriptsize chèn ảnh / biểu đồ sau};
+  \end{tikzpicture}
+}
+\newcommand{\metric}[3]{%
+  \begin{block}{#1}
+    \centering
+    {\Large\bfseries #2}\\[-2pt]
+    {\scriptsize #3}
+  \end{block}
+}
+
+\title[Hybrid Fashion Recommender]{Hybrid Fashion Recommender System}
+\subtitle{Hệ thống gợi ý thời trang đa phương thức cho H\&M}
+\author[Group 9]{%
+  Nguyễn Thế Khải -- 202400050\\
+  Phạm Gia Linh -- 202416262\\
+  Nguyễn Đăng Long -- 202400057
+}
+\institute[HUST]{Đại học Bách khoa Hà Nội \\ Nhập môn Trí tuệ Nhân tạo -- CTTN KHMT K69}
+\date{\today}
+
+\begin{document}
+
+% ---------------------------------------------------------------------------
+\begin{frame}[plain]
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[HUSTRed] (current page.south west) rectangle (current page.north east);
+    \fill[HUSTDark] (current page.south west) rectangle ([xshift=0.34\paperwidth]current page.north west);
+    \fill[HUSTGold] ([xshift=0.34\paperwidth]current page.south west) rectangle ([xshift=0.355\paperwidth]current page.north west);
+  \end{tikzpicture}
+  \vspace{1.2cm}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.31\textwidth}
+      {\color{white}\bfseries\Large HUST}\\[4pt]
+      {\color{white}\small School of Information and Communication Technology}\\[1.0cm]
+      \placeholder{3.2cm}{3.2cm}\\[-2pt]
+      {\color{white}\scriptsize Có thể thay bằng logo HUST}
+    \end{column}
+    \begin{column}{0.64\textwidth}
+      {\color{white}\Huge\bfseries Hybrid Fashion Recommender System}\\[8pt]
+      {\color{white}\Large Hệ thống gợi ý thời trang đa phương thức}\\[12pt]
+      \hustbar\\[14pt]
+      {\color{white}\normalsize Nhập môn Trí tuệ Nhân tạo -- Group 9}\\[8pt]
+      {\color{white}\small Nguyễn Thế Khải \quad Phạm Gia Linh \quad Nguyễn Đăng Long}\\[18pt]
+      {\color{white}\small Dataset: H\&M Personalized Fashion Recommendations}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Agenda}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \begin{enumerate}
+        \item Bài toán và mục tiêu
+        \item Dữ liệu H\&M
+        \item Pipeline xử lý
+        \item Baseline, MF và NCF
+      \end{enumerate}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{enumerate}
+        \setcounter{enumi}{4}
+        \item Hybrid model
+        \item Huấn luyện và đánh giá
+        \item Demo Streamlit
+        \item Kết luận và hướng phát triển
+      \end{enumerate}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Problem}
+\begin{frame}{Đặt Vấn Đề}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.56\textwidth}
+      \begin{block}{Bối cảnh}
+        Thương mại điện tử thời trang có số lượng sản phẩm lớn, thay đổi nhanh theo mùa vụ và xu hướng.
+      \end{block}
+      \begin{itemize}
+        \item Người dùng khó tự tìm sản phẩm phù hợp trong kho lớn.
+        \item Collaborative Filtering hiệu quả khi có lịch sử mua hàng, nhưng yếu với cold start.
+        \item Thời trang phụ thuộc mạnh vào yếu tố thị giác: màu sắc, kiểu dáng, texture.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \placeholder{\linewidth}{4.7cm}
+      \vspace{2mm}
+      {\scriptsize Gợi ý: chèn ảnh minh họa catalog / app thương mại điện tử.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Mục Tiêu Dự Án}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.50\textwidth}
+      \begin{block}{Mục tiêu mô hình}
+        Xây dựng mô hình lai kết hợp tín hiệu hành vi, metadata và ảnh sản phẩm.
+      \end{block}
+      \begin{itemize}
+        \item Baseline: popularity.
+        \item Collaborative Filtering: MF, NCF.
+        \item Hybrid: NCF + visual features + metadata.
+        \item Tối ưu và so sánh bằng MAP@12.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \begin{block}{Mục tiêu hệ thống}
+        Demo cục bộ bằng Streamlit cho recommendation top-12.
+      \end{block}
+      \begin{itemize}
+        \item Chọn hoặc nhập User ID.
+        \item Hiển thị sản phẩm đề xuất kèm ảnh.
+        \item Có fallback sang popularity baseline khi thiếu checkpoint.
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Data}
+\begin{frame}{Dữ Liệu H\&M}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.55\textwidth}
+      \begin{table}
+        \small
+        \begin{tabular}{p{0.28\linewidth}p{0.62\linewidth}}
+          \toprule
+          \textbf{Nguồn} & \textbf{Vai trò} \\
+          \midrule
+          Transactions & Lịch sử mua hàng theo thời gian, tạo implicit feedback. \\
+          Articles & Metadata sản phẩm: nhóm hàng, màu, department, garment group. \\
+          Images & Ảnh sản phẩm dùng để trích xuất visual embedding. \\
+          \bottomrule
+        \end{tabular}
+      \end{table}
+      \begin{itemize}
+        \item Encode \texttt{customer\_id}, \texttt{article\_id} sang index liên tục.
+        \item Lưu dữ liệu đã xử lý ở định dạng Parquet để tăng tốc I/O.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \placeholder{\linewidth}{4.8cm}
+      \vspace{2mm}
+      {\scriptsize Gợi ý: chèn sơ đồ 3 bảng dữ liệu hoặc vài ảnh sản phẩm mẫu.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Pipeline}
+\begin{frame}{Pipeline Tổng Thể}
+  \centering
+  \begin{tikzpicture}[
+    node distance=0.75cm and 0.75cm,
+    box/.style={draw=HUSTLine, fill=HUSTGray, rounded corners=2pt, align=center, minimum width=2.35cm, minimum height=0.82cm, font=\small},
+    redbox/.style={box, draw=HUSTRed, very thick},
+    arr/.style={-{Latex[length=2mm]}, thick, color=HUSTDark}
+  ]
+    \node[box] (raw) {Raw Data\\transactions/articles/images};
+    \node[box, right=of raw] (prep) {Preprocess\\Polars + encode ID};
+    \node[box, right=of prep] (features) {Feature Store\\Parquet + NPZ};
+    \node[redbox, below=of features] (model) {Models\\Popularity / MF / NCF / Hybrid};
+    \node[box, left=of model] (eval) {Evaluation\\MAP@12, HR@12, NDCG@12};
+    \node[box, right=of model] (demo) {Streamlit Demo\\Top-12 products};
+
+    \draw[arr] (raw) -- (prep);
+    \draw[arr] (prep) -- (features);
+    \draw[arr] (features) -- (model);
+    \draw[arr] (model) -- (eval);
+    \draw[arr] (model) -- (demo);
+  \end{tikzpicture}
+  \vspace{5mm}
+  \begin{block}{Code modules}
+    \small \texttt{src/data\_processing} \quad
+    \texttt{src/features} \quad
+    \texttt{src/models} \quad
+    \texttt{src/evaluation} \quad
+    \texttt{app/app.py}
+  \end{block}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Tiền Xử Lý Và Feature Engineering}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \begin{block}{Data preprocessing}
+        \begin{itemize}
+          \item Đọc dữ liệu bằng Polars.
+          \item Join transactions với customers và articles.
+          \item Lọc và chia train/test theo thời gian.
+          \item Tạo index số nguyên cho user/item.
+        \end{itemize}
+      \end{block}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \begin{block}{Content features}
+        \begin{itemize}
+          \item Visual: ResNet-50 pretrained, vector 2048 chiều.
+          \item Metadata: encode categorical attributes của article.
+          \item Lookup thiếu feature: dùng vector 0 để pipeline vẫn chạy.
+        \end{itemize}
+      \end{block}
+    \end{column}
+  \end{columns}
+  \vspace{2mm}
+  \placeholder{0.94\linewidth}{2.0cm}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Models}
+\begin{frame}{Các Mô Hình So Sánh}
+  \begin{table}
+    \small
+    \begin{tabular}{p{0.20\linewidth}p{0.33\linewidth}p{0.33\linewidth}}
+      \toprule
+      \textbf{Phương pháp} & \textbf{Ưu điểm} & \textbf{Hạn chế} \\
+      \midrule
+      Popularity & Nhanh, ổn định, baseline rõ ràng & Cá nhân hóa thấp \\
+      Matrix Factorization & Học latent user/item từ lịch sử mua hàng & Yếu khi user/item ít tương tác \\
+      NCF & Biểu diễn phi tuyến qua GMF + MLP & Tốn tài nguyên, dễ overfit \\
+      Hybrid & Kết hợp CF với metadata và ảnh & Thiết kế và training phức tạp hơn \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+  \begin{block}{Chiến lược}
+    Bắt đầu từ baseline đơn giản, sau đó tăng dần độ phức tạp để đo cải thiện thực sự.
+  \end{block}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Matrix Factorization}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.54\textwidth}
+      \begin{block}{Ý tưởng}
+        Mỗi user và item được ánh xạ vào không gian latent; điểm tương tác là dot product cộng bias.
+      \end{block}
+      \begin{equation*}
+        \hat{r}_{u,i} = \mathbf{p}_u^\top \mathbf{q}_i + b_u + b_i
+      \end{equation*}
+      \begin{itemize}
+        \item Implemented in \texttt{src/models/matrix\_factorization.py}.
+        \item Huấn luyện trên implicit feedback với negative sampling.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \placeholder{\linewidth}{4.5cm}
+      \vspace{2mm}
+      {\scriptsize Gợi ý: chèn sơ đồ user/item embedding.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Neural Collaborative Filtering}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.55\textwidth}
+      \begin{block}{NeuMF architecture}
+        NCF dùng hai nhánh song song để học tương tác user--item.
+      \end{block}
+      \begin{itemize}
+        \item GMF: nhân từng phần tử giữa user embedding và item embedding.
+        \item MLP: concat embedding, đưa qua nhiều dense layer.
+        \item Output: concat hai nhánh và dự đoán logit tương tác.
+      \end{itemize}
+      \begin{equation*}
+        \hat{y}_{ui} = f\left([\mathbf{p}_u \odot \mathbf{q}_i;\ \mathrm{MLP}(\mathbf{p}'_u,\mathbf{q}'_i)]\right)
+      \end{equation*}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \placeholder{\linewidth}{4.6cm}
+      \vspace{2mm}
+      {\scriptsize Gợi ý: chèn diagram GMF + MLP.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Hybrid Model: NCF + Visual + Metadata}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.58\textwidth}
+      \begin{block}{Fusion}
+        Ghép latent vector từ NCF với vector ảnh 2048 chiều và metadata feature, sau đó đưa qua dense layers.
+      \end{block}
+      \begin{equation*}
+        \hat{y}_{ui} =
+        \mathrm{MLP}_{fusion}
+        \left(
+        [\mathbf{h}_{NCF}; \mathbf{v}_{image}; \mathbf{m}_{metadata}]
+        \right)
+      \end{equation*}
+      \begin{itemize}
+        \item Fusion layers: 256 $\rightarrow$ 64 $\rightarrow$ 1.
+        \item BatchNorm, ReLU, Dropout để giảm overfitting.
+        \item Score cuối cùng qua sigmoid khi inference.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.38\textwidth}
+      \placeholder{\linewidth}{5.0cm}
+      \vspace{2mm}
+      {\scriptsize Gợi ý: chèn architecture hybrid model.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Training}
+\begin{frame}{Huấn Luyện}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \begin{block}{Training setup}
+        \begin{itemize}
+          \item Loss: BCEWithLogitsLoss cho implicit feedback.
+          \item Negative sampling: 4 negative / 1 positive.
+          \item Optimizer: Adam, learning rate mặc định $10^{-3}$.
+          \item Batch size mặc định: 4096.
+        \end{itemize}
+      \end{block}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \begin{block}{Ổn định training}
+        \begin{itemize}
+          \item Early stopping theo validation loss.
+          \item Lưu \texttt{hybrid\_best.pt} và \texttt{hybrid\_last.pt}.
+          \item Mixed precision khi có CUDA.
+          \item Gradient clipping.
+        \end{itemize}
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Metric Đánh Giá}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.52\textwidth}
+      \begin{block}{MAP@12}
+        Metric chính theo bài toán H\&M: đo chất lượng danh sách top-12 có xét thứ tự.
+      \end{block}
+      \begin{equation*}
+        \mathrm{MAP@12} =
+        \frac{1}{|U|}\sum_{u \in U}
+        \frac{1}{\min(m_u,12)}
+        \sum_{k=1}^{12} P_u(k)\,\mathrm{rel}_u(k)
+      \end{equation*}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \begin{block}{Metric bổ sung}
+        \begin{itemize}
+          \item Hit Rate@12: có ít nhất một hit trong top-12.
+          \item NDCG@12: thưởng cho hit ở vị trí cao hơn.
+        \end{itemize}
+      \end{block}
+      \placeholder{\linewidth}{2.0cm}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Results}
+\begin{frame}{Kết Quả Thử Nghiệm Hiện Có}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.33\textwidth}
+      \metric{MF}{0.2585}{MAP@12 smoke test}
+    \end{column}
+    \begin{column}{0.33\textwidth}
+      \metric{NCF}{0.4727}{MAP@12 smoke test}
+    \end{column}
+    \begin{column}{0.33\textwidth}
+      \metric{Popularity}{0.1674}{MAP@12 baseline run}
+    \end{column}
+  \end{columns}
+  \vspace{4mm}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.52\textwidth}
+      \begin{itemize}
+        \item Các số này lấy từ các file CSV trong \texttt{reports/}.
+        \item NCF vượt MF và popularity trong smoke test hiện có.
+        \item Khi có kết quả final, thay bảng và hình tại slide này.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \placeholder{\linewidth}{3.0cm}
+      \vspace{1mm}
+      {\scriptsize Chèn \texttt{model\_metric\_comparison.png} hoặc biểu đồ final.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Demo}
+\begin{frame}{Demo Streamlit}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.45\textwidth}
+      \begin{block}{Luồng sử dụng}
+        \begin{enumerate}
+          \item Chọn hoặc nhập \texttt{user\_id}.
+          \item Chọn Hybrid Model hoặc Popularity Baseline.
+          \item Hệ thống score candidate items.
+          \item Hiển thị top-12 sản phẩm.
+        \end{enumerate}
+      \end{block}
+      \begin{itemize}
+        \item Module chính: \texttt{app/app.py}.
+        \item Inference wrapper: \texttt{src/models/inference\_pipeline.py}.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \placeholder{\linewidth}{5.0cm}
+      \vspace{2mm}
+      {\scriptsize Gợi ý: chèn screenshot Streamlit demo.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\section{Risks}
+\begin{frame}{Rủi Ro Và Cách Xử Lý}
+  \begin{table}
+    \small
+    \begin{tabular}{p{0.28\linewidth}p{0.60\linewidth}}
+      \toprule
+      \textbf{Rủi ro} & \textbf{Hướng xử lý} \\
+      \midrule
+      Tài nguyên RAM/GPU hạn chế & Lọc theo thời gian, downsample, dùng Parquet, batch nhỏ, mixed precision. \\
+      Overfitting & Dropout, L2 regularization, early stopping, bắt đầu từ model đơn giản. \\
+      Dữ liệu theo mùa vụ/xu hướng & Chia train/test theo thời gian, so sánh với popularity gần thời điểm test. \\
+      Thiếu visual feature & Fallback vector 0, vẫn dùng CF và metadata. \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}{Kết Luận}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.55\textwidth}
+      \begin{block}{Điểm đã đạt}
+        \begin{itemize}
+          \item Thiết kế pipeline recommendation modular.
+          \item Có baseline, MF, NCF và Hybrid model.
+          \item Có metric MAP@12, Hit Rate@12, NDCG@12.
+          \item Có demo Streamlit cho top-12 recommendation.
+        \end{itemize}
+      \end{block}
+    \end{column}
+    \begin{column}{0.40\textwidth}
+      \begin{block}{Hướng phát triển}
+        \begin{itemize}
+          \item Tuning hybrid model trên tập lớn hơn.
+          \item Thêm time-aware recommendation.
+          \item Cá nhân hóa theo style hoặc nhóm sản phẩm.
+          \item Đánh giá ablation: CF only vs image vs metadata.
+        \end{itemize}
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+\begin{frame}[plain]
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[HUSTRed] (current page.south west) rectangle (current page.north east);
+    \fill[HUSTDark] (current page.south west) rectangle ([yshift=0.23\paperheight]current page.north east);
+    \fill[HUSTGold] (current page.south west) rectangle ([yshift=0.015\paperheight]current page.south east);
+  \end{tikzpicture}
+  \vfill
+  \centering
+  {\color{white}\Huge\bfseries Thank You}\\[10pt]
+  {\color{white}\Large Q\&A}\\[18pt]
+  {\color{white}\normalsize Hybrid Fashion Recommender System -- Group 9}
+  \vfill
+\end{frame}
+
+\end{document}
