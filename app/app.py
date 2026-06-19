@@ -367,6 +367,37 @@ def main() -> None:
     </div>
     """)
 
+    # Auto-generate mock data if missing (e.g., when deployed on Streamlit Cloud)
+    from src.config import (
+        ARTICLES_PARQUET_PATH,
+        CUSTOMERS_PARQUET_PATH,
+        TRAIN_PARQUET_PATH,
+        TEST_PARQUET_PATH,
+        VISUAL_FEATURES_NPZ_PATH,
+        BEST_CHECKPOINT_PATH
+    )
+    
+    missing_files = []
+    for path, name in [
+        (ARTICLES_PARQUET_PATH, "articles parquet"),
+        (CUSTOMERS_PARQUET_PATH, "customers parquet"),
+        (TRAIN_PARQUET_PATH, "train parquet"),
+        (TEST_PARQUET_PATH, "test parquet"),
+        (VISUAL_FEATURES_NPZ_PATH, "visual features npz"),
+        (BEST_CHECKPOINT_PATH, "best model checkpoint")
+    ]:
+        if not path.exists():
+            missing_files.append(name)
+            
+    if missing_files:
+        st.warning(f"Note: Missing dataset/model files ({', '.join(missing_files)}). Generating mock data for demo mode...")
+        try:
+            from scripts.generate_mock_data import main as generate_mock_data
+            generate_mock_data()
+            st.success("Mock data generated successfully!")
+        except Exception as e:
+            st.error(f"Failed to generate mock data: {e}")
+
     # Load data & pipeline
     _, train_df, _, customers_df, articles_df = load_datasets()
     pipeline = build_inference_pipeline(train_df, articles_df)
