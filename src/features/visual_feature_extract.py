@@ -13,6 +13,7 @@ class VisualFeatureExtractor:
         npz_path: Path = VISUAL_FEATURES_NPZ_PATH,
         feature_dimension: int = VISUAL_FEATURE_DIM,
         item_id_to_article_id : Mapping[int , int] | None = None ,
+        progress_callback = None,
     ) -> None:
         self._npz_path = Path(npz_path)
         self._feature_dimension = feature_dimension
@@ -21,6 +22,7 @@ class VisualFeatureExtractor:
             for item_id  , article_id in (item_id_to_article_id or {}).items()
         }
         self._features: Dict[str, np.ndarray] = {}
+        self._progress_callback = progress_callback
         self._load_features_from_npz()
 
     @property
@@ -28,15 +30,42 @@ class VisualFeatureExtractor:
         return self._feature_dimension
     
     def _load_features_from_npz(self) -> None:
+        cache_path = self._npz_path.with_suffix(".pkl")
+        if cache_path.exists():
+            try:
+                import pickle
+                logger.info("Loading cached visual features from %s...", cache_path.name)
+                with open(cache_path, "rb") as f:
+                    self._features = pickle.load(f)
+                logger.info("Loaded %d visual features from cache.", len(self._features))
+                if self._progress_callback is not None:
+                    self._progress_callback(len(self._features), len(self._features))
+                return
+            except Exception as exc:
+                logger.warning("Failed to load cache %s: %s. Falling back to NPZ.", cache_path, exc)
+
         try:
+            import pickle
+            logger.info("First-time loading visual features from NPZ. This may take a while...")
             with np.load(self._npz_path) as data_features:
-                for key in data_features.files:
+                files = data_features.files
+                total_files = len(files)
+                for idx, key in enumerate(files, 1):
                     self._features[key] = data_features[key].astype(np.float32)
-            logger.info(
-                "Loaded %d visual feature vectors from %s",
-                len(self._features),
-                self._npz_path.name,
-            )
+                    if idx % 1000 == 0 or idx == total_files:
+                        if self._progress_callback is not None:
+                            self._progress_callback(idx, total_files)
+                        else:
+                            logger.info("Loaded %d/%d features from NPZ...", idx, total_files)
+
+            try:
+                logger.info("Saving visual features cache to %s...", cache_path.name)
+                with open(cache_path, "wb") as f:
+                    pickle.dump(self._features, f, protocol=pickle.HIGHEST_PROTOCOL)
+                logger.info("Cache saved successfully.")
+            except Exception as exc:
+                logger.warning("Failed to save visual features cache: %s", exc)
+
         except Exception as exc:
             logger.warning(
                 "Failed to load visual features from %s: %s", self._npz_path, exc

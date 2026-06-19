@@ -9,10 +9,15 @@ Run with:   streamlit run app/app.py
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import html
 import sys
 from pathlib import Path
+
+# Windows asyncio event loop policy workaround (Python 3.13 Proactor AssertionError fix)
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import polars as pl
 import streamlit as st
@@ -208,7 +213,28 @@ def build_inference_pipeline(
     _articles_df: pl.DataFrame,
 ) -> InferencePipeline:
     """Construct the inference pipeline (model + baseline + feature extractor)."""
-    return InferencePipeline(train_df=_train_df, articles_df=_articles_df)
+    # Create progress bar inside the streamlit app
+    progress_bar = st.progress(0.0, text="Initializing pipeline...")
+    
+    def update_progress(current, total):
+        val = min(1.0, current / total)
+        progress_bar.progress(val, text=f"Loading visual features: {current:,}/{total:,} ({val * 100:.1f}%)")
+        
+    import inspect
+    sig = inspect.signature(InferencePipeline.__init__)
+    if "progress_callback" in sig.parameters:
+        pipeline = InferencePipeline(
+            train_df=_train_df, 
+            articles_df=_articles_df,
+            progress_callback=update_progress
+        )
+    else:
+        pipeline = InferencePipeline(
+            train_df=_train_df, 
+            articles_df=_articles_df
+        )
+    progress_bar.empty()
+    return pipeline
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -403,7 +429,10 @@ def main() -> None:
     pipeline = build_inference_pipeline(train_df, articles_df)
 
     # Stats bar
-    model_status = "Loaded" if pipeline.model_is_loaded else "Not Found"
+    hybrid_status_color = "#4CAF50" if pipeline.model_is_loaded else "#f44336"
+    mf_status_color = "#4CAF50" if pipeline.mf_model_is_loaded else "#f44336"
+    ncf_status_color = "#4CAF50" if pipeline.ncf_model_is_loaded else "#f44336"
+
     st.html(f"""
     <div class="stats-row">
         <div class="stat-card">
@@ -418,9 +447,13 @@ def main() -> None:
             <div class="stat-value">{len(train_df):,}</div>
             <div class="stat-label">Transactions (Train)</div>
         </div>
-        <div class="stat-card">
-            <div class="stat-value">{model_status}</div>
-            <div class="stat-label">Model Checkpoint</div>
+        <div class="stat-card" style="display: flex; flex-direction: column; justify-content: center; align-items: center;">
+            <div style="font-size: 0.85rem; text-align: left; padding: 0 0.5rem; display: inline-block;">
+                <div style="color: {hybrid_status_color};">● Hybrid: {"Loaded" if pipeline.model_is_loaded else "Missing"}</div>
+                <div style="color: {mf_status_color};">● MF: {"Loaded" if pipeline.mf_model_is_loaded else "Missing"}</div>
+                <div style="color: {ncf_status_color};">● NCF: {"Loaded" if pipeline.ncf_model_is_loaded else "Missing"}</div>
+            </div>
+            <div class="stat-label">Model Checkpoints</div>
         </div>
     </div>
     """)
@@ -455,8 +488,13 @@ def main() -> None:
 
         recommendation_method = st.radio(
             "Recommendation Method",
-            ["Hybrid Model (NCF + Visual)", "Popularity Baseline"],
-            index=0 if pipeline.model_is_loaded else 1,
+            [
+                "Hybrid Model (NCF + Visual)",
+                "Matrix Factorization (MF)",
+                "Neural Collaborative Filtering (NCF)",
+                "Popularity Baseline"
+            ],
+            index=0 if pipeline.model_is_loaded else 3,
         )
 
         run_button = st.button(
@@ -466,10 +504,12 @@ def main() -> None:
         st.markdown("---")
         st.markdown("### About")
         st.markdown(
-            "This demo uses a **Hybrid NCF + Visual Feature** model "
-            "trained on the H&M Personalized Fashion Recommendations dataset. "
-            "The model combines collaborative filtering latent features with "
-            "2048-dim image embeddings through dense fusion layers."
+            "This demo supports multiple recommendation models trained on the "
+            "H&M Personalized Fashion Recommendations dataset:\n\n"
+            "- **Hybrid Model**: Combines Collaborative Filtering features and 2048-dim visual embeddings.\n"
+            "- **Matrix Factorization (MF)**: Uses user-item latent factor embedding tables.\n"
+            "- **Neural Collaborative Filtering (NCF)**: Uses deep feedforward layers on top of collaborative embeddings.\n"
+            "- **Popularity Baseline**: Standard non-personalized trending recommendation."
         )
 
     # -- Main content ------------------------------------------------------
@@ -484,19 +524,52 @@ def main() -> None:
             )
 
         # Get recommendations
-        use_hybrid = "Hybrid" in recommendation_method
-
-        if use_hybrid and pipeline.model_is_loaded:
-            with st.spinner("Running Hybrid Model inference ..."):
-                recommendations = pipeline.recommend_hybrid(
-                    user_id=int(selected_user_id)
+        if recommendation_method == "Hybrid Model (NCF + Visual)":
+            if pipeline.model_is_loaded:
+                with st.spinner("Running Hybrid Model inference ..."):
+                    recommendations = pipeline.recommend_hybrid(
+                        user_id=int(selected_user_id)
+                    )
+                st.success(
+                    f"Hybrid Model returned {len(recommendations)} recommendations."
                 )
-            st.success(
-                f"Hybrid Model returned {len(recommendations)} recommendations."
-            )
+            else:
+                st.info("No Hybrid checkpoint found — falling back to Popularity Baseline.")
+                recommendations = pipeline.recommend_popular()
+                st.success(
+                    f"Popularity Baseline returned {len(recommendations)} recommendations."
+                )
+        elif recommendation_method == "Matrix Factorization (MF)":
+            if pipeline.mf_model_is_loaded:
+                with st.spinner("Running Matrix Factorization inference ..."):
+                    recommendations = pipeline.recommend_mf(
+                        user_id=int(selected_user_id)
+                    )
+                st.success(
+                    f"Matrix Factorization model returned {len(recommendations)} recommendations."
+                )
+            else:
+                st.info("No MF checkpoint found — falling back to Popularity Baseline.")
+                recommendations = pipeline.recommend_popular()
+                st.success(
+                    f"Popularity Baseline returned {len(recommendations)} recommendations."
+                )
+        elif recommendation_method == "Neural Collaborative Filtering (NCF)":
+            if pipeline.ncf_model_is_loaded:
+                with st.spinner("Running Neural Collaborative Filtering inference ..."):
+                    recommendations = pipeline.recommend_ncf(
+                        user_id=int(selected_user_id)
+                    )
+                st.success(
+                    f"Neural Collaborative Filtering model returned {len(recommendations)} recommendations."
+                )
+            else:
+                st.info("No NCF checkpoint found — falling back to Popularity Baseline.")
+                recommendations = pipeline.recommend_popular()
+                st.success(
+                    f"Popularity Baseline returned {len(recommendations)} recommendations."
+                )
         else:
-            if use_hybrid and not pipeline.model_is_loaded:
-                st.info("No checkpoint found — falling back to Popularity Baseline.")
             recommendations = pipeline.recommend_popular()
             st.success(
                 f"Popularity Baseline returned {len(recommendations)} recommendations."
