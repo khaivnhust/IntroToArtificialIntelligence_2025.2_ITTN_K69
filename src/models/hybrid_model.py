@@ -19,13 +19,14 @@ from src.config import MF_EMBEDDING_DIM, MLP_LAYER_SIZES, VISUAL_FEATURE_DIM
 
 
 class HybridRecommendationModel(nn.Module):
-    """NCF + visual feature fusion model."""
+    """NCF + visual + metadata feature fusion model."""
 
     def __init__(
         self,
         num_users: int,
         num_items: int,
         visual_feature_dim: int = VISUAL_FEATURE_DIM,
+        metadata_feature_dim: int = 8,
         mf_embedding_dim: int = MF_EMBEDDING_DIM,
         mlp_layer_sizes: List[int] | None = None,
     ) -> None:
@@ -45,8 +46,8 @@ class HybridRecommendationModel(nn.Module):
         # NCF latent dimension = GMF dim + last MLP layer dim
         ncf_latent_dim = mf_embedding_dim + mlp_layer_sizes[-1]
 
-        # -- Fusion dense layers (NCF latent + visual) -------------------------
-        fusion_input_dim = ncf_latent_dim + visual_feature_dim
+        # -- Fusion dense layers (NCF latent + visual + metadata) --------------
+        fusion_input_dim = ncf_latent_dim + visual_feature_dim + metadata_feature_dim
 
         self.fusion_dense_layers = nn.Sequential(
             nn.Linear(fusion_input_dim, 256),
@@ -67,8 +68,9 @@ class HybridRecommendationModel(nn.Module):
         user_indices: torch.Tensor,
         item_indices: torch.Tensor,
         visual_features: torch.Tensor,
+        metadata_features: torch.Tensor,
     ) -> torch.Tensor:
-        """Predict interaction probability using CF + visual signals.
+        """Predict interaction probability using CF + visual + metadata signals.
 
         Parameters
         ----------
@@ -78,6 +80,8 @@ class HybridRecommendationModel(nn.Module):
             Shape ``(batch_size,)``.
         visual_features : torch.Tensor
             Shape ``(batch_size, visual_feature_dim)``.
+        metadata_features : torch.Tensor
+            Shape ``(batch_size, metadata_feature_dim)``.
 
         Returns
         -------
@@ -96,8 +100,8 @@ class HybridRecommendationModel(nn.Module):
 
         ncf_latent = torch.cat([gmf_vector, mlp_vector], dim=-1)
 
-        # --- 2. Fuse NCF latent + visual features ----------------------------
-        hybrid_vector = torch.cat([ncf_latent, visual_features], dim=-1)
+        # --- 2. Fuse NCF latent + visual features + metadata features ---------
+        hybrid_vector = torch.cat([ncf_latent, visual_features, metadata_features], dim=-1)
 
         prediction = self.fusion_dense_layers(hybrid_vector)
         return prediction.squeeze(-1)

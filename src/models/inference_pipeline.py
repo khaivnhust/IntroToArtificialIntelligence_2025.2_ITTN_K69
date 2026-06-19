@@ -25,6 +25,7 @@ from src.config import (
     VISUAL_FEATURES_NPZ_PATH,
 )
 from src.features.visual_feature_extractor import VisualFeatureExtractor
+from src.features.metadata_feature_encoder import MetadataFeatureEncoder
 from src.models.hybrid_model import HybridRecommendationModel
 from src.models.popularity_baseline import PopularityBaseline
 
@@ -72,11 +73,20 @@ class InferencePipeline:
             item_id_to_article_id=item_id_to_article_id
         )
 
+        # Metadata feature encoder
+        if articles_df is not None:
+            self._metadata_encoder = MetadataFeatureEncoder(articles_df)
+            metadata_dim = self._metadata_encoder.feature_dim
+        else:
+            self._metadata_encoder = None
+            metadata_dim = 8
+
         # Hybrid model
         self._model = HybridRecommendationModel(
             num_users=self.num_users,
             num_items=self.num_items,
             visual_feature_dim=self._feature_extractor.feature_dim,
+            metadata_feature_dim=metadata_dim,
             mf_embedding_dim=MF_EMBEDDING_DIM,
             mlp_layer_sizes=list(MLP_LAYER_SIZES),
         )
@@ -142,7 +152,14 @@ class InferencePipeline:
                     batch_item_ids.tolist()
                 ).to(self._device)
 
-                scores = self._model(user_tensor, item_tensor, visual_tensor).cpu().numpy()
+                if self._metadata_encoder is not None:
+                    metadata_tensor = self._metadata_encoder.get_feature_vectors(
+                        batch_item_ids.tolist()
+                    ).to(self._device)
+                else:
+                    metadata_tensor = torch.zeros((batch_size, 8), dtype=torch.float32, device=self._device)
+
+                scores = self._model(user_tensor, item_tensor, visual_tensor, metadata_tensor).cpu().numpy()
                 all_scores.extend(zip(batch_item_ids.tolist(), scores.tolist()))
 
         all_scores.sort(key=lambda pair: pair[1], reverse=True)

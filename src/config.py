@@ -11,7 +11,7 @@ ARTICLES_PARQUET_PATH = DATA_DIR / "articles_cleaned.parquet"
 CUSTOMERS_PARQUET_PATH = DATA_DIR / "customers_cleaned.parquet"
 TRAIN_PARQUET_PATH = DATA_DIR / "hm_train.parquet"
 TEST_PARQUET_PATH = DATA_DIR / "hm_test.parquet"
-VISUAL_FEATURES_NPZ_PATH = DATA_DIR / "visual_features_sample.npz"
+VISUAL_FEATURES_NPZ_PATH = DATA_DIR / "visual_features_full.npz"
 IMAGE_DIR = PROJECT_ROOT/"data"/"images"
 
 CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
