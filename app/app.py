@@ -41,7 +41,7 @@ st.set_page_config(
 # ═══════════════════════════════════════════════════════════════════════════
 # Custom CSS (no emoji, professional dark theme)
 # ═══════════════════════════════════════════════════════════════════════════
-st.markdown("""
+st.html("""
 <style>
     /* -- Global typography ------------------------------------------------ */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -188,7 +188,7 @@ st.markdown("""
         background: #1e2a3a;
     }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -271,7 +271,7 @@ def render_customer_profile(customer_info: dict, user_id: int) -> None:
     is_active = "Yes" if customer_info.get("Active", 0) == 1.0 else "No"
     fashion_news = customer_info.get("fashion_news_frequency", "N/A")
 
-    st.markdown(f"""
+    st.html(f"""
     <div class="user-profile">
         <h3>Customer Profile — user_id: {user_id}</h3>
         <div class="profile-row"><span class="profile-key">Age</span><span class="profile-val">{age}</span></div>
@@ -280,7 +280,7 @@ def render_customer_profile(customer_info: dict, user_id: int) -> None:
         <div class="profile-row"><span class="profile-key">Active</span><span class="profile-val">{is_active}</span></div>
         <div class="profile-row"><span class="profile-key">Fashion News</span><span class="profile-val">{fashion_news}</span></div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def render_product_cards(recommendations, articles_df: pl.DataFrame) -> None:
@@ -329,7 +329,7 @@ def render_product_cards(recommendations, articles_df: pl.DataFrame) -> None:
         """
 
     cards_html += "</div>"
-    st.markdown(cards_html, unsafe_allow_html=True)
+    st.html(cards_html)
 
 
 def render_details_table(recommendations, articles_df: pl.DataFrame) -> None:
@@ -360,12 +360,12 @@ def render_details_table(recommendations, articles_df: pl.DataFrame) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 def main() -> None:
     # Header
-    st.markdown("""
+    st.html("""
     <div class="main-header">
         <h1>H&M Fashion Recommender</h1>
         <p>Hybrid NCF + Visual Features — Personalized Top-12 Product Recommendations</p>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     # Load data & pipeline
     _, train_df, _, customers_df, articles_df = load_datasets()
@@ -373,7 +373,7 @@ def main() -> None:
 
     # Stats bar
     model_status = "Loaded" if pipeline.model_is_loaded else "Not Found"
-    st.markdown(f"""
+    st.html(f"""
     <div class="stats-row">
         <div class="stat-card">
             <div class="stat-value">{pipeline.num_users:,}</div>
@@ -392,7 +392,7 @@ def main() -> None:
             <div class="stat-label">Model Checkpoint</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     # -- Sidebar -----------------------------------------------------------
     with st.sidebar:
@@ -480,12 +480,12 @@ def main() -> None:
 
     else:
         # Landing prompt
-        st.markdown("""
+        st.html("""
         <div style="text-align: center; padding: 4rem 2rem; color: #8892b0;">
             <h3 style="color: #ccd6f6; font-weight: 600;">Select a customer and click "Get Recommendations"</h3>
             <p>Choose a customer from the sidebar, pick a recommendation method, and see their personalised top-12 products.</p>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
 
 if __name__ == "__main__":
